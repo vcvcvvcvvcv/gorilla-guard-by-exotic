@@ -1,8 +1,8 @@
 from flask import Flask, render_template, jsonify, request
 from pathlib import Path
 import os
-import base64
 import json
+import base64
 import secrets
 import time
 import hashlib
@@ -27,8 +27,11 @@ app.config["MAX_CONTENT_LENGTH"] = 512 * 1024
 # ============================================================
 # GAME CONFIGURATION
 # ============================================================
-# Put the REAL values in your hosting platform's environment
-# variables. Do not put secret keys directly in this file.
+#
+# These are placeholders only.
+#
+# Configure the real values as server-side environment
+# variables. Do NOT put real secret keys in this file.
 # ============================================================
 
 GAME_CONFIG = {
@@ -58,41 +61,38 @@ GAME_CONFIG = {
 
 
 # ============================================================
-# DISCORD WEBHOOK SLOTS
+# DISCORD WEBHOOK CONFIGURATION
+# ============================================================
+#
+# FIVE SEPARATE DESTINATIONS
+#
+# 1. Anti-cheat detections
+# 2. Player reports
+# 3. Security events
+# 4. Authentication failures
+# 5. System/server events
+#
+# The real webhook URLs are environment variables.
 # ============================================================
 
 DISCORD_WEBHOOKS = {
 
-    # MOTHERSHIP
-    "mothership_pass": os.environ.get(
-        "DISCORD_WEBHOOK_MOTHERSHIP_PASS"
-    ),
-
-    "mothership_fail": os.environ.get(
-        "DISCORD_WEBHOOK_MOTHERSHIP_FAIL"
-    ),
-
-    # ANTI-CHEAT
     "anticheat": os.environ.get(
         "DISCORD_WEBHOOK_ANTICHEAT"
     ),
 
-    # REPORTS
     "reports": os.environ.get(
         "DISCORD_WEBHOOK_REPORTS"
     ),
 
-    # SECURITY
     "security": os.environ.get(
         "DISCORD_WEBHOOK_SECURITY"
     ),
 
-    # AUTHENTICATION
     "auth": os.environ.get(
         "DISCORD_WEBHOOK_AUTH"
     ),
 
-    # SYSTEM
     "system": os.environ.get(
         "DISCORD_WEBHOOK_SYSTEM"
     ),
@@ -100,12 +100,21 @@ DISCORD_WEBHOOKS = {
 
 
 # ============================================================
-# DISCORD ALERT FUNCTION
+# DISCORD ALERT HELPER
 # ============================================================
 
-def send_discord_alert(category, message):
+def send_discord_alert(
+    category,
+    message
+):
+    """
+    Sends an alert to the webhook assigned
+    to the specified category.
+    """
 
-    webhook = DISCORD_WEBHOOKS.get(category)
+    webhook = DISCORD_WEBHOOKS.get(
+        category
+    )
 
     if not webhook:
         return False
@@ -114,9 +123,11 @@ def send_discord_alert(category, message):
 
         response = requests.post(
             webhook,
+
             json={
                 "content": message
             },
+
             timeout=5,
         )
 
@@ -128,76 +139,124 @@ def send_discord_alert(category, message):
 
 
 # ============================================================
-# MOTHERSHIP FAILURE HELPER
+# SECURITY EVENT LOGGER
 # ============================================================
 
-def mothership_failure(
-    version,
-    user_id,
-    reason
+def security_event(
+    category,
+    message
 ):
 
     send_discord_alert(
-        "mothership_fail",
-        (
-            f"❌ **Mothership {version} FAILED**\n"
-            f"Player: `{user_id}`\n"
-            f"Reason: {reason}"
-        ),
+        category,
+        message
     )
 
-    send_discord_alert(
-        "security",
-        (
-            f"🚨 Mothership {version} security event\n"
-            f"Player: `{user_id}`\n"
-            f"Reason: {reason}"
-        ),
-    )
+
+# ============================================================
+# MOTHERSHIP V1
+# ============================================================
+
+MOTHERSHIP_V1 = {
+
+    "id": "mothership-v1",
+
+    "name": "Mothership V1",
+
+    "version": "V1",
+
+    "status": "available",
+
+    "status_text": "AVAILABLE",
+
+    "status_size": "normal",
+
+    "icon": "🚀",
+
+    "category": "Mothership",
+
+    "risk": "Critical",
+
+    "description": (
+        "Foundational server-side integrity "
+        "authentication with attestation, "
+        "package verification, and device "
+        "integrity validation."
+    ),
+
+    "tags": [
+        "mothership",
+        "attestation",
+        "integrity",
+        "authentication",
+    ],
+
+    "required_configuration": [
+        "titleid",
+        "meta_app_id",
+        "package_id",
+        "playfab_secret_key",
+        "meta_api_key",
+    ],
+
+    "code": r'''
+import os
+import base64
+import json
+import requests
+
+from flask import Flask, jsonify, request
+
+
+app = Flask(__name__)
+
+
+# ============================================================
+# CONFIGURATION
+# ============================================================
+
+PLAYFAB_TITLE_ID = os.environ.get(
+    "PLAYFAB_TITLE_ID",
+    "YOUR_TITLE_ID"
+)
+
+META_APP_ID = os.environ.get(
+    "META_APP_ID",
+    "YOUR_META_APP_ID"
+)
+
+PLAYFAB_SECRET_KEY = os.environ.get(
+    "PLAYFAB_SECRET_KEY"
+)
+
+META_API_KEY = os.environ.get(
+    "META_API_KEY"
+)
+
+VALID_PACKAGE = os.environ.get(
+    "VALID_PACKAGE",
+    "YOUR_PACKAGE_ID"
+)
+
+
+# ============================================================
+# FAILURE RESPONSE
+# ============================================================
+
+def authentication_failed(reason):
 
     return jsonify({
+
         "success": False,
+
         "BanMessage":
-            f"MOTHERSHIP {version} "
-            f"AUTHENTICATION FAILED. "
+            "MOTHERSHIP V1 AUTHENTICATION FAILED. "
             f"REASON: {reason}",
-        "BanExpirationTime": "Unknown",
+
+        "BanExpirationTime":
+            "Unknown",
+
     }), 403
-
-
-# ============================================================
-# MOTHERSHIP SUCCESS HELPER
-# ============================================================
-
-def mothership_success(
-    version,
-    user_id
-):
-
-    send_discord_alert(
-        "mothership_pass",
-        (
-            f"✅ **Mothership {version} PASSED**\n"
-            f"Player: `{user_id}`\n"
-            f"Integrity authentication passed."
-        ),
-    )
-
-    send_discord_alert(
-        "system",
-        (
-            f"🦍 Gorilla Guard Mothership {version} "
-            f"authentication passed for `{user_id}`."
-        ),
-    )
-
-    return jsonify({
-        "success": True,
-        "product":
-            f"Gorilla Guard Mothership {version}",
-        "message":
-            "Integrity authentication passed.",
-    })
 
 
 # ============================================================
@@ -209,22 +268,24 @@ def verify_attestation(token):
     if not token:
         return None
 
-    meta_api_key = GAME_CONFIG.get(
-        "meta_api_key"
-    )
-
-    if not meta_api_key:
+    if not META_API_KEY:
         return None
 
     try:
 
         response = requests.get(
+
             "https://graph.oculus.com/"
             "platform_integrity/verify",
 
             params={
-                "token": token,
-                "access_token": meta_api_key,
+
+                "token":
+                    token,
+
+                "access_token":
+                    META_API_KEY,
+
             },
 
             timeout=5,
@@ -272,13 +333,13 @@ def decode_claims(claims):
 
 
 # ============================================================
-# MOTHERSHIP V1
+# AUTHENTICATION
 # ============================================================
 
 @app.post(
     "/v1/player/client/auth/complete/QUEST"
 )
-def mothership_v1():
+def mothership_auth():
 
     body = request.get_json(
         silent=True
@@ -301,30 +362,44 @@ def mothership_v1():
 
     if not user_id:
 
-        return mothership_failure(
-            "V1",
-            "unknown",
+        security_event(
+            "auth",
+            "Mothership V1 rejected authentication: "
+            "missing UserId."
+        )
+
+        return authentication_failed(
             "Missing UserId."
         )
 
 
     if not token:
 
-        return mothership_failure(
-            "V1",
-            user_id,
+        security_event(
+            "auth",
+            f"Mothership V1 rejected authentication "
+            f"for player {user_id}: missing token."
+        )
+
+        return authentication_failed(
             "Missing AttestationToken."
         )
 
 
-    data = verify_attestation(token)
+    data = verify_attestation(
+        token
+    )
 
 
     if not data:
 
-        return mothership_failure(
-            "V1",
-            user_id,
+        security_event(
+            "security",
+            f"Mothership V1 attestation verification "
+            f"failed for player {user_id}."
+        )
+
+        return authentication_failed(
             "Attestation verification failed."
         )
 
@@ -337,9 +412,13 @@ def mothership_v1():
 
     if not records:
 
-        return mothership_failure(
-            "V1",
-            user_id,
+        security_event(
+            "security",
+            f"Mothership V1 received an empty "
+            f"attestation response for {user_id}."
+        )
+
+        return authentication_failed(
             "Attestation response contained no data."
         )
 
@@ -351,9 +430,13 @@ def mothership_v1():
         "message"
     ) != "success":
 
-        return mothership_failure(
-            "V1",
-            user_id,
+        security_event(
+            "security",
+            f"Mothership V1 rejected invalid "
+            f"attestation for {user_id}."
+        )
+
+        return authentication_failed(
             "Attestation validation failed."
         )
 
@@ -367,9 +450,7 @@ def mothership_v1():
 
     if not claims:
 
-        return mothership_failure(
-            "V1",
-            user_id,
+        return authentication_failed(
             "Invalid attestation claims."
         )
 
@@ -404,75 +485,180 @@ def mothership_v1():
 
     if not package_id:
 
-        return mothership_failure(
-            "V1",
-            user_id,
+        return authentication_failed(
             "Package ID missing."
         )
 
 
-    if package_id != GAME_CONFIG["package_id"]:
+    if package_id != VALID_PACKAGE:
 
-        send_discord_alert(
+        security_event(
             "anticheat",
-            (
-                f"🛡️ **Package mismatch detected**\n"
-                f"Mothership: V1\n"
-                f"Player: `{user_id}`"
-            ),
+            f"Mothership V1 detected a package "
+            f"mismatch for player {user_id}."
         )
 
-        return mothership_failure(
-            "V1",
-            user_id,
-            "Package ID mismatch."
+        return authentication_failed(
+            "Package ID does not match the "
+            "configured application."
         )
 
 
     if not package_digest:
 
-        return mothership_failure(
-            "V1",
-            user_id,
+        return authentication_failed(
             "Package certificate digest missing."
         )
 
 
     if not unique_id:
 
-        return mothership_failure(
-            "V1",
-            user_id,
+        return authentication_failed(
             "Device identity missing."
         )
 
 
     if integrity_state != "Advanced":
 
-        send_discord_alert(
+        security_event(
             "anticheat",
-            (
-                f"🛡️ **Untrusted device detected**\n"
-                f"Mothership: V1\n"
-                f"Player: `{user_id}`"
-            ),
+            f"Mothership V1 rejected an untrusted "
+            f"device for player {user_id}."
         )
 
-        return mothership_failure(
-            "V1",
-            user_id,
+        return authentication_failed(
             "Device integrity was not trusted."
         )
 
 
-    return mothership_success(
-        "V1",
-        user_id
+    security_event(
+        "system",
+        f"Mothership V1 authentication passed "
+        f"for player {user_id}."
     )
 
 
+    return jsonify({
+
+        "success":
+            True,
+
+        "product":
+            "Gorilla Guard Mothership V1",
+
+        "message":
+            "Integrity authentication passed.",
+
+    })
+
+
+if __name__ == "__main__":
+
+    app.run(
+        host="0.0.0.0",
+        port=int(
+            os.environ.get(
+                "PORT",
+                7080
+            )
+        )
+    )
+''',
+}
+
+
 # ============================================================
-# MOTHERSHIP V2 SECURITY STATE
+# MOTHERSHIP V2
+# ============================================================
+
+MOTHERSHIP_V2 = {
+
+    "id": "mothership-v2",
+
+    "name": "Mothership V2",
+
+    "version": "V2",
+
+    "status": "available",
+
+    "status_text": "AVAILABLE",
+
+    "status_size": "normal",
+
+    "icon": "🚀",
+
+    "category": "Mothership",
+
+    "risk": "Critical",
+
+    "description": (
+        "Enhanced Mothership authentication with "
+        "nonce-based replay resistance, stricter "
+        "attestation validation, package verification, "
+        "and security-event handling."
+    ),
+
+    "tags": [
+        "mothership",
+        "attestation",
+        "nonce",
+        "replay",
+        "integrity",
+    ],
+
+    "required_configuration": [
+        "titleid",
+        "meta_app_id",
+        "package_id",
+        "playfab_secret_key",
+        "meta_api_key",
+    ],
+
+    "code": r'''
+import os
+import base64
+import json
+import secrets
+import time
+import hashlib
+import requests
+
+from flask import Flask, jsonify, request
+
+
+app = Flask(__name__)
+
+
+# ============================================================
+# CONFIGURATION
+# ============================================================
+
+PLAYFAB_TITLE_ID = os.environ.get(
+    "PLAYFAB_TITLE_ID",
+    "YOUR_TITLE_ID"
+)
+
+META_APP_ID = os.environ.get(
+    "META_APP_ID",
+    "YOUR_META_APP_ID"
+)
+
+PLAYFAB_SECRET_KEY = os.environ.get(
+    "PLAYFAB_SECRET_KEY"
+)
+
+META_API_KEY = os.environ.get(
+    "META_API_KEY"
+)
+
+VALID_PACKAGE = os.environ.get(
+    "VALID_PACKAGE",
+    "YOUR_PACKAGE_ID"
+)
+
+
+# ============================================================
+# SECURITY STATE
 # ============================================================
 
 pending_nonces = {}
@@ -481,7 +667,28 @@ NONCE_LIFETIME = 120
 
 
 # ============================================================
-# CREATE NONCE
+# FAILURE
+# ============================================================
+
+def authentication_failed(reason):
+
+    return jsonify({
+
+        "success":
+            False,
+
+        "BanMessage":
+            "MOTHERSHIP V2 AUTHENTICATION FAILED. "
+            f"REASON: {reason}",
+
+        "BanExpirationTime":
+            "Unknown",
+
+    }), 403
+
+
+# ============================================================
+# NONCES
 # ============================================================
 
 def create_nonce(user_id):
@@ -491,16 +698,17 @@ def create_nonce(user_id):
     )
 
     pending_nonces[user_id] = {
-        "nonce": nonce,
-        "created": time.time(),
+
+        "nonce":
+            nonce,
+
+        "created":
+            time.time(),
+
     }
 
     return nonce
 
-
-# ============================================================
-# GET NONCE
-# ============================================================
 
 def get_nonce(user_id):
 
@@ -510,6 +718,7 @@ def get_nonce(user_id):
 
     if not record:
         return None
+
 
     if (
         time.time()
@@ -524,12 +733,9 @@ def get_nonce(user_id):
 
         return None
 
+
     return record["nonce"]
 
-
-# ============================================================
-# CONSUME NONCE
-# ============================================================
 
 def consume_nonce(user_id):
 
@@ -540,13 +746,86 @@ def consume_nonce(user_id):
 
 
 # ============================================================
-# MOTHERSHIP V2 NONCE ENDPOINT
+# ATTESTATION
+# ============================================================
+
+def verify_attestation(token):
+
+    if not token:
+        return None
+
+    if not META_API_KEY:
+        return None
+
+    try:
+
+        response = requests.get(
+
+            "https://graph.oculus.com/"
+            "platform_integrity/verify",
+
+            params={
+
+                "token":
+                    token,
+
+                "access_token":
+                    META_API_KEY,
+
+            },
+
+            timeout=5,
+        )
+
+        response.raise_for_status()
+
+        return response.json()
+
+    except requests.RequestException:
+
+        return None
+
+
+# ============================================================
+# CLAIM DECODER
+# ============================================================
+
+def decode_claims(claims):
+
+    if not claims:
+        return None
+
+    try:
+
+        padding = "=" * (
+            -len(claims) % 4
+        )
+
+        decoded = base64.urlsafe_b64decode(
+            claims + padding
+        )
+
+        return json.loads(
+            decoded.decode("utf-8")
+        )
+
+    except (
+        ValueError,
+        TypeError,
+        json.JSONDecodeError,
+    ):
+
+        return None
+
+
+# ============================================================
+# NONCE ENDPOINT
 # ============================================================
 
 @app.post(
     "/v2/player/client/auth/nonce"
 )
-def mothership_v2_nonce():
+def request_nonce():
 
     body = request.get_json(
         silent=True
@@ -563,8 +842,8 @@ def mothership_v2_nonce():
     if not user_id:
 
         return jsonify({
-            "success": False,
-            "error": "Missing UserId."
+            "error":
+                "Missing UserId."
         }), 400
 
 
@@ -573,31 +852,32 @@ def mothership_v2_nonce():
     )
 
 
-    send_discord_alert(
+    security_event(
         "system",
-        (
-            f"🔐 Mothership V2 issued "
-            f"an authentication nonce for "
-            f"`{user_id}`."
-        ),
+        f"Mothership V2 issued an authentication "
+        f"nonce for player {user_id}."
     )
 
 
     return jsonify({
-        "success": True,
-        "nonce": nonce,
-        "expires_in": NONCE_LIFETIME,
+
+        "nonce":
+            nonce,
+
+        "expires_in":
+            NONCE_LIFETIME,
+
     })
 
 
 # ============================================================
-# MOTHERSHIP V2 AUTHENTICATION
+# AUTHENTICATION
 # ============================================================
 
 @app.post(
     "/v2/player/client/auth/complete/QUEST"
 )
-def mothership_v2():
+def mothership_auth():
 
     body = request.get_json(
         silent=True
@@ -628,18 +908,14 @@ def mothership_v2():
 
     if not user_id:
 
-        return mothership_failure(
-            "V2",
-            "unknown",
+        return authentication_failed(
             "Missing UserId."
         )
 
 
     if not token:
 
-        return mothership_failure(
-            "V2",
-            user_id,
+        return authentication_failed(
             "Missing AttestationToken."
         )
 
@@ -651,18 +927,13 @@ def mothership_v2():
 
     if not expected_nonce:
 
-        send_discord_alert(
-            "anticheat",
-            (
-                f"🛡️ **Invalid/expired nonce**\n"
-                f"Mothership: V2\n"
-                f"Player: `{user_id}`"
-            ),
+        security_event(
+            "security",
+            f"Mothership V2 rejected an expired "
+            f"or missing nonce for {user_id}."
         )
 
-        return mothership_failure(
-            "V2",
-            user_id,
+        return authentication_failed(
             "Nonce expired or does not exist."
         )
 
@@ -672,18 +943,13 @@ def mothership_v2():
         expected_nonce
     ):
 
-        send_discord_alert(
+        security_event(
             "anticheat",
-            (
-                f"🛡️ **Nonce mismatch detected**\n"
-                f"Mothership: V2\n"
-                f"Player: `{user_id}`"
-            ),
+            f"Mothership V2 detected a nonce "
+            f"mismatch for {user_id}."
         )
 
-        return mothership_failure(
-            "V2",
-            user_id,
+        return authentication_failed(
             "Nonce mismatch."
         )
 
@@ -695,9 +961,7 @@ def mothership_v2():
 
     if not data:
 
-        return mothership_failure(
-            "V2",
-            user_id,
+        return authentication_failed(
             "Attestation verification failed."
         )
 
@@ -710,9 +974,7 @@ def mothership_v2():
 
     if not records:
 
-        return mothership_failure(
-            "V2",
-            user_id,
+        return authentication_failed(
             "Attestation response was empty."
         )
 
@@ -724,9 +986,13 @@ def mothership_v2():
         "message"
     ) != "success":
 
-        return mothership_failure(
-            "V2",
-            user_id,
+        security_event(
+            "security",
+            f"Mothership V2 rejected invalid "
+            f"attestation for {user_id}."
+        )
+
+        return authentication_failed(
             "Attestation validation failed."
         )
 
@@ -740,9 +1006,7 @@ def mothership_v2():
 
     if not claims:
 
-        return mothership_failure(
-            "V2",
-            user_id,
+        return authentication_failed(
             "Invalid attestation claims."
         )
 
@@ -777,63 +1041,47 @@ def mothership_v2():
 
     if not package_id:
 
-        return mothership_failure(
-            "V2",
-            user_id,
+        return authentication_failed(
             "Package ID missing."
         )
 
 
-    if package_id != GAME_CONFIG["package_id"]:
+    if package_id != VALID_PACKAGE:
 
-        send_discord_alert(
+        security_event(
             "anticheat",
-            (
-                f"🛡️ **Package mismatch detected**\n"
-                f"Mothership: V2\n"
-                f"Player: `{user_id}`"
-            ),
+            f"Mothership V2 detected a package "
+            f"mismatch for {user_id}."
         )
 
-        return mothership_failure(
-            "V2",
-            user_id,
+        return authentication_failed(
             "Package ID mismatch."
         )
 
 
     if not package_digest:
 
-        return mothership_failure(
-            "V2",
-            user_id,
+        return authentication_failed(
             "Package certificate digest missing."
         )
 
 
     if not unique_id:
 
-        return mothership_failure(
-            "V2",
-            user_id,
+        return authentication_failed(
             "Device identity missing."
         )
 
 
     if integrity_state != "Advanced":
 
-        send_discord_alert(
+        security_event(
             "anticheat",
-            (
-                f"🛡️ **Untrusted device detected**\n"
-                f"Mothership: V2\n"
-                f"Player: `{user_id}`"
-            ),
+            f"Mothership V2 rejected an untrusted "
+            f"device for {user_id}."
         )
 
-        return mothership_failure(
-            "V2",
-            user_id,
+        return authentication_failed(
             "Device integrity was not trusted."
         )
 
@@ -848,34 +1096,101 @@ def mothership_v2():
     ).hexdigest()[:24]
 
 
-    send_discord_alert(
-        "mothership_pass",
-        (
-            f"✅ **Mothership V2 PASSED**\n"
-            f"Player: `{user_id}`\n"
-            f"Device reference: `{device_reference}`"
-        ),
-    )
-
-
-    send_discord_alert(
+    security_event(
         "system",
-        (
-            f"🦍 Mothership V2 authentication "
-            f"passed for `{user_id}`."
-        ),
+        f"Mothership V2 authentication passed "
+        f"for player {user_id}."
     )
 
 
     return jsonify({
-        "success": True,
+
+        "success":
+            True,
+
         "product":
             "Gorilla Guard Mothership V2",
+
         "device_reference":
             device_reference,
+
         "message":
             "Enhanced integrity authentication passed.",
+
     })
+
+
+if __name__ == "__main__":
+
+    app.run(
+        host="0.0.0.0",
+        port=int(
+            os.environ.get(
+                "PORT",
+                7080
+            )
+        )
+    )
+''',
+}
+
+
+# ============================================================
+# COMING SOON
+# ============================================================
+
+MOTHERSHIP_V3 = {
+    "id": "mothership-v3",
+    "name": "Mothership V3",
+    "version": "V3",
+    "status": "coming_soon",
+    "status_text": "COMING SOON",
+    "status_size": "huge",
+    "icon": "🔒",
+    "category": "Mothership",
+    "risk": "Critical",
+    "description":
+        "Advanced Mothership protection.",
+    "tags":
+        ["mothership", "coming-soon"],
+    "code": None,
+}
+
+
+MOTHERSHIP_V4 = {
+    "id": "mothership-v4",
+    "name": "Mothership V4",
+    "version": "V4",
+    "status": "coming_soon",
+    "status_text": "COMING SOON",
+    "status_size": "huge",
+    "icon": "🔒",
+    "category": "Mothership",
+    "risk": "Critical",
+    "description":
+        "Next-generation Mothership protection.",
+    "tags":
+        ["mothership", "coming-soon"],
+    "code": None,
+}
+
+
+MOTHERSHIP_V5 = {
+    "id": "mothership-v5",
+    "name": "Mothership V5",
+    "version": "V5",
+    "status": "coming_soon",
+    "status_text": "COMING SOON",
+    "status_size": "huge",
+    "icon": "🔒",
+    "category": "Mothership",
+    "risk": "Critical",
+    "description":
+        "Future advanced Mothership protection.",
+    "tags":
+        ["mothership", "coming-soon"],
+    "code": None,
+}
 
 
 # ============================================================
@@ -883,121 +1198,16 @@ def mothership_v2():
 # ============================================================
 
 MOTHERSHIP = [
-
-    {
-        "id": "mothership-v1",
-        "name": "Mothership V1",
-        "version": "V1",
-        "status": "available",
-        "status_text": "AVAILABLE",
-        "status_size": "normal",
-        "icon": "🚀",
-        "category": "Mothership",
-        "risk": "Critical",
-        "description":
-            "Server-side integrity authentication.",
-        "tags": [
-            "mothership",
-            "attestation",
-            "integrity",
-            "authentication",
-        ],
-        "required_configuration": [
-            "titleid",
-            "Meta app id",
-            "package_id",
-            "playfab_secret_key",
-            "meta_api_key",
-        ],
-    },
-
-    {
-        "id": "mothership-v2",
-        "name": "Mothership V2",
-        "version": "V2",
-        "status": "available",
-        "status_text": "AVAILABLE",
-        "status_size": "normal",
-        "icon": "🚀",
-        "category": "Mothership",
-        "risk": "Critical",
-        "description":
-            "Enhanced authentication with "
-            "nonce-based replay resistance.",
-        "tags": [
-            "mothership",
-            "attestation",
-            "nonce",
-            "replay",
-            "integrity",
-        ],
-        "required_configuration": [
-            "titleid",
-            "Meta app id",
-            "package_id",
-            "playfab_secret_key",
-            "meta_api_key",
-        ],
-    },
-
-    {
-        "id": "mothership-v3",
-        "name": "Mothership V3",
-        "version": "V3",
-        "status": "coming_soon",
-        "status_text": "COMING SOON",
-        "status_size": "huge",
-        "icon": "🔒",
-        "category": "Mothership",
-        "risk": "Critical",
-        "description":
-            "Advanced Mothership protection.",
-        "tags": [
-            "mothership",
-            "coming-soon",
-        ],
-    },
-
-    {
-        "id": "mothership-v4",
-        "name": "Mothership V4",
-        "version": "V4",
-        "status": "coming_soon",
-        "status_text": "COMING SOON",
-        "status_size": "huge",
-        "icon": "🔒",
-        "category": "Mothership",
-        "risk": "Critical",
-        "description":
-            "Next-generation Mothership protection.",
-        "tags": [
-            "mothership",
-            "coming-soon",
-        ],
-    },
-
-    {
-        "id": "mothership-v5",
-        "name": "Mothership V5",
-        "version": "V5",
-        "status": "coming_soon",
-        "status_text": "COMING SOON",
-        "status_size": "huge",
-        "icon": "🔒",
-        "category": "Mothership",
-        "risk": "Critical",
-        "description":
-            "Future advanced Mothership protection.",
-        "tags": [
-            "mothership",
-            "coming-soon",
-        ],
-    },
+    MOTHERSHIP_V1,
+    MOTHERSHIP_V2,
+    MOTHERSHIP_V3,
+    MOTHERSHIP_V4,
+    MOTHERSHIP_V5,
 ]
 
 
 # ============================================================
-# OTHER ANTI-CHEAT MODULES
+# OTHER MODULES
 # ============================================================
 
 MODULES = [
@@ -1010,42 +1220,15 @@ MODULES = [
         "risk": "High",
         "status": "available",
         "status_text": "AVAILABLE",
+        "status_size": "normal",
         "description":
-            "Server-side validation for impossible "
-            "speed, position deltas, and velocity.",
-        "tags": [
-            "movement",
-            "velocity",
-            "server",
-        ],
-        "code": """
-# Movement Integrity
-
-MAX_SPEED = 7.0
-MAX_DELTA = 2.5
-
-
-def validate_movement(
-    previous_position,
-    current_position,
-    delta_time
-):
-
-    if delta_time <= 0:
-        return False
-
-    distance = distance_between(
-        previous_position,
-        current_position
-    )
-
-    speed = distance / delta_time
-
-    return (
-        speed <= MAX_SPEED
-        and distance <= MAX_DELTA
-    )
-""",
+            "Server-side movement validation.",
+        "tags":
+            ["movement", "velocity", "server"],
+        "code":
+            "# Movement Integrity\n\n"
+            "MAX_SPEED = 7.0\n"
+            "MAX_DELTA = 2.5\n",
     },
 
     {
@@ -1056,30 +1239,14 @@ def validate_movement(
         "risk": "High",
         "status": "available",
         "status_text": "AVAILABLE",
+        "status_size": "normal",
         "description":
-            "Flags impossible position changes.",
-        "tags": [
-            "teleport",
-            "position",
-        ],
-        "code": """
-# Teleport Detection
-
-MAX_ALLOWED_DISTANCE = 5.0
-
-
-def detect_teleport(
-    previous_position,
-    current_position
-):
-
-    distance = distance_between(
-        previous_position,
-        current_position
-    )
-
-    return distance > MAX_ALLOWED_DISTANCE
-""",
+            "Detects impossible position changes.",
+        "tags":
+            ["teleport", "position"],
+        "code":
+            "# Teleport Detection\n\n"
+            "MAX_ALLOWED_DISTANCE = 5.0\n",
     },
 
     {
@@ -1090,32 +1257,14 @@ def detect_teleport(
         "risk": "High",
         "status": "available",
         "status_text": "AVAILABLE",
+        "status_size": "normal",
         "description":
-            "Short-lived server sessions with "
-            "replay protection.",
-        "tags": [
-            "session",
-            "replay",
-        ],
-        "code": """
-# Session Integrity
-
-SESSION_LIFETIME_SECONDS = 900
-
-
-def validate_session(session):
-
-    if not session:
-        return False
-
-    if session.is_expired():
-        return False
-
-    if session.replay_detected():
-        return False
-
-    return True
-""",
+            "Protects server sessions.",
+        "tags":
+            ["session", "replay"],
+        "code":
+            "# Session Integrity\n\n"
+            "SESSION_LIFETIME_SECONDS = 900\n",
     },
 
     {
@@ -1126,225 +1275,23 @@ def validate_session(session):
         "risk": "High",
         "status": "available",
         "status_text": "AVAILABLE",
+        "status_size": "normal",
         "description":
             "Rate-limits gameplay requests.",
-        "tags": [
-            "rpc",
-            "spam",
-            "network",
-        ],
-        "code": """
-# RPC Spam Guard
-
-MAX_REQUESTS_PER_WINDOW = 30
-WINDOW_SECONDS = 10
-
-
-def allow_request(
-    player_id,
-    limiter
-):
-
-    return limiter.allow(
-        player_id,
-        MAX_REQUESTS_PER_WINDOW,
-        WINDOW_SECONDS
-    )
-""",
-    },
-
-    {
-        "id": "packet",
-        "icon": "📦",
-        "name": "Packet Validation",
-        "category": "Network",
-        "risk": "High",
-        "status": "available",
-        "status_text": "AVAILABLE",
-        "description":
-            "Validates expected event structures.",
-        "tags": [
-            "packet",
-            "network",
-            "state",
-        ],
-        "code": """
-# Packet Validation
-
-REQUIRED_FIELDS = {
-    "player_id",
-    "event",
-    "timestamp"
-}
-
-
-def validate_packet(packet):
-
-    if not isinstance(
-        packet,
-        dict
-    ):
-        return False
-
-    return REQUIRED_FIELDS.issubset(
-        packet.keys()
-    )
-""",
-    },
-
-    {
-        "id": "inventory",
-        "icon": "🎒",
-        "name": "Inventory Authority",
-        "category": "Economy",
-        "risk": "Critical",
-        "status": "available",
-        "status_text": "AVAILABLE",
-        "description":
-            "Keeps inventory changes authoritative.",
-        "tags": [
-            "inventory",
-            "shop",
-            "server",
-        ],
-        "code": """
-# Inventory Authority
-
-
-def grant_item(
-    player,
-    item_id
-):
-
-    if not item_exists(
-        item_id
-    ):
-        return False
-
-    add_item_to_server_inventory(
-        player.id,
-        item_id
-    )
-
-    return True
-""",
-    },
-
-    {
-        "id": "currency",
-        "icon": "💎",
-        "name": "Currency Authority",
-        "category": "Economy",
-        "risk": "Critical",
-        "status": "available",
-        "status_text": "AVAILABLE",
-        "description":
-            "Validates economy operations server-side.",
-        "tags": [
-            "currency",
-            "economy",
-        ],
-        "code": """
-# Currency Authority
-
-
-def add_currency(
-    player_id,
-    amount
-):
-
-    if amount <= 0:
-        return False
-
-    return server_currency_transaction(
-        player_id,
-        amount
-    )
-""",
-    },
-
-    {
-        "id": "reports",
-        "icon": "🚨",
-        "name": "Report Abuse Guard",
-        "category": "Moderation",
-        "risk": "Medium",
-        "status": "available",
-        "status_text": "AVAILABLE",
-        "description":
-            "Flags suspicious report bursts.",
-        "tags": [
-            "reports",
-            "moderation",
-        ],
-        "code": """
-# Report Abuse Guard
-
-REPORT_LIMIT = 10
-
-
-def check_report_rate(
-    player_id,
-    report_store
-):
-
-    reports = report_store.count_recent(
-        player_id
-    )
-
-    return reports <= REPORT_LIMIT
-""",
-    },
-
-    {
-        "id": "logging",
-        "icon": "📋",
-        "name": "Detection Logging",
-        "category": "Monitoring",
-        "risk": "Medium",
-        "status": "available",
-        "status_text": "AVAILABLE",
-        "description":
-            "Stores detection evidence and timestamps.",
-        "tags": [
-            "logs",
-            "evidence",
-        ],
-        "code": """
-# Detection Logging
-
-
-def log_detection(
-    player_id,
-    detection_type,
-    evidence
-):
-
-    record = {
-        "player_id": player_id,
-        "detection": detection_type,
-        "evidence": evidence,
-        "timestamp": current_timestamp()
-    }
-
-    save_detection_record(
-        record
-    )
-
-    return record
-""",
+        "tags":
+            ["rpc", "spam", "network"],
+        "code":
+            "# RPC Spam Guard\n\n"
+            "MAX_REQUESTS_PER_WINDOW = 30\n",
     },
 ]
 
 
 # ============================================================
-# COMBINED PRODUCTS
+# COMBINED CATALOG
 # ============================================================
 
-PRODUCTS = (
-    MODULES
-    + MOTHERSHIP
-)
+PRODUCTS = MODULES + MOTHERSHIP
 
 
 # ============================================================
@@ -1358,7 +1305,7 @@ TARGETS = [
         "name": "Vercel + Flask",
         "icon": "▲",
         "description":
-            "Python Flask backend deployed through Vercel.",
+            "Python Flask backend.",
     },
 
     {
@@ -1366,7 +1313,7 @@ TARGETS = [
         "name": "PlayFab",
         "icon": "🎮",
         "description":
-            "PlayFab server-side integration target.",
+            "PlayFab server integration.",
     },
 ]
 
@@ -1444,12 +1391,10 @@ def get_modules():
             public_product
         )
 
-    return jsonify(output)
+    return jsonify(
+        output
+    )
 
-
-# ============================================================
-# SINGLE MODULE API
-# ============================================================
 
 @app.get("/api/modules/<product_id>")
 def get_module(product_id):
@@ -1470,14 +1415,13 @@ def get_module(product_id):
                 "Product not found"
         }), 404
 
-
     return jsonify(
         product
     )
 
 
 # ============================================================
-# DISCORD STATUS
+# DISCORD CONFIGURATION STATUS
 # ============================================================
 
 @app.get("/api/discord/status")
@@ -1485,11 +1429,30 @@ def discord_status():
 
     return jsonify({
 
-        category: bool(webhook)
+        "anticheat":
+            bool(
+                DISCORD_WEBHOOKS["anticheat"]
+            ),
 
-        for category, webhook
-        in DISCORD_WEBHOOKS.items()
+        "reports":
+            bool(
+                DISCORD_WEBHOOKS["reports"]
+            ),
 
+        "security":
+            bool(
+                DISCORD_WEBHOOKS["security"]
+            ),
+
+        "auth":
+            bool(
+                DISCORD_WEBHOOKS["auth"]
+            ),
+
+        "system":
+            bool(
+                DISCORD_WEBHOOKS["system"]
+            ),
     })
 
 
@@ -1500,7 +1463,15 @@ def discord_status():
 @app.post("/api/discord/test/<category>")
 def test_discord(category):
 
-    if category not in DISCORD_WEBHOOKS:
+    allowed_categories = {
+        "anticheat",
+        "reports",
+        "security",
+        "auth",
+        "system",
+    }
+
+    if category not in allowed_categories:
 
         return jsonify({
             "success": False,
@@ -1520,8 +1491,8 @@ def test_discord(category):
         return jsonify({
             "success": False,
             "error":
-                "That webhook is not configured "
-                "or Discord rejected the request."
+                "Webhook is not configured or "
+                "the Discord request failed."
         }), 400
 
 
@@ -1578,14 +1549,31 @@ def health():
 
         "discord": {
 
-            category:
-                bool(webhook)
+            "anticheat":
+                bool(
+                    DISCORD_WEBHOOKS["anticheat"]
+                ),
 
-            for category, webhook
-            in DISCORD_WEBHOOKS.items()
+            "reports":
+                bool(
+                    DISCORD_WEBHOOKS["reports"]
+                ),
 
+            "security":
+                bool(
+                    DISCORD_WEBHOOKS["security"]
+                ),
+
+            "auth":
+                bool(
+                    DISCORD_WEBHOOKS["auth"]
+                ),
+
+            "system":
+                bool(
+                    DISCORD_WEBHOOKS["system"]
+                ),
         },
-
     })
 
 
@@ -1597,12 +1585,12 @@ def health():
 def hello_world():
 
     return (
-        "Gorilla Guard Flask backend online."
+        "Gorilla Guard backend online."
     )
 
 
 # ============================================================
-# LOCAL DEVELOPMENT
+# RUN
 # ============================================================
 
 if __name__ == "__main__":
