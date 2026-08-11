@@ -1,828 +1,659 @@
-from flask import Flask, render_template, jsonify, request
-from pathlib import Path
+# ============================================================
+# GORILLA GUARD ADVANCED
+# ============================================================
+#
+# Tiered server-side application integrity system
+#
+# LEVEL 1  = ADVANCED
+# LEVEL 2  = ELITE
+# LEVEL 3  = VIP
+# LEVEL 4  = MAXIMUM
+#
+# Features:
+#   - APK/package verification
+#   - Signing certificate SHA-256 verification
+#   - Certificate rotation support
+#   - Attestation validation hook
+#   - Nonce/replay protection
+#   - Session protection
+#   - Threat scoring
+#   - Tamper/inconsistency detection
+#   - Device integrity evaluation
+#   - Detailed Discord security alerts
+#   - Separate webhook slots
+#   - Fail-closed security configuration
+#
+# IMPORTANT:
+# The server cannot directly inspect a private APK keystore.
+# It verifies signing information and trusted attestation
+# data supplied by the application/platform.
+#
+# ============================================================
+
+from flask import Flask, jsonify, request
+from functools import wraps
+
 import os
-import json
-import base64
-import secrets
 import time
+import hmac
 import hashlib
+import secrets
+import logging
+import re
+from datetime import datetime, timezone
+
 import requests
 
 
 # ============================================================
-# APP
+# APPLICATION
 # ============================================================
 
-BASE_DIR = Path(__file__).resolve().parent.parent
-
-app = Flask(
-    __name__,
-    template_folder=str(BASE_DIR / "templates"),
-    static_folder=str(BASE_DIR / "static"),
-)
+app = Flask(__name__)
 
 app.config["MAX_CONTENT_LENGTH"] = 512 * 1024
 
 
 # ============================================================
-# GAME CONFIGURATION
+# LOGGING
 # ============================================================
 
-GAME_CONFIG = {
-    "titleid": os.environ.get(
-        "PLAYFAB_TITLE_ID",
-        "YOUR_TITLE_ID"
-    ),
+logging.basicConfig(
+    level=logging.INFO
+)
 
-    "meta_app_id": os.environ.get(
-        "META_APP_ID",
-        "YOUR_META_APP_ID"
-    ),
+logger = logging.getLogger(
+    "gorilla_guard"
+)
 
-    "package_id": os.environ.get(
-        "VALID_PACKAGE",
-        "YOUR_PACKAGE_ID"
-    ),
 
-    "playfab_secret_key": os.environ.get(
-        "PLAYFAB_SECRET_KEY"
-    ),
+# ============================================================
+# SECURITY LEVELS
+# ============================================================
 
-    "meta_api_key": os.environ.get(
-        "META_API_KEY"
-    ),
+SECURITY_LEVELS = {
+
+    1: {
+        "name": "Advanced",
+        "severity": "advanced",
+    },
+
+    2: {
+        "name": "Elite",
+        "severity": "elite",
+    },
+
+    3: {
+        "name": "VIP",
+        "severity": "vip",
+    },
+
+    4: {
+        "name": "Maximum",
+        "severity": "maximum",
+    },
+
+}
+
+
+DEFAULT_SECURITY_LEVEL = int(
+    os.environ.get(
+        "GORILLA_SECURITY_LEVEL",
+        "3"
+    )
+)
+
+
+if DEFAULT_SECURITY_LEVEL not in SECURITY_LEVELS:
+
+    DEFAULT_SECURITY_LEVEL = 3
+
+
+# ============================================================
+# APPLICATION CONFIGURATION
+# ============================================================
+
+CONFIG = {
+
+    "package_id":
+        os.environ.get(
+            "VALID_PACKAGE",
+            ""
+        ).strip(),
+
+    "title_id":
+        os.environ.get(
+            "PLAYFAB_TITLE_ID",
+            ""
+        ).strip(),
+
+    "meta_app_id":
+        os.environ.get(
+            "META_APP_ID",
+            ""
+        ).strip(),
+
+    "meta_api_key":
+        os.environ.get(
+            "META_API_KEY",
+            ""
+        ).strip(),
+
+    "playfab_secret":
+        os.environ.get(
+            "PLAYFAB_SECRET_KEY",
+            ""
+        ).strip(),
+
 }
 
 
 # ============================================================
-# GENERAL DISCORD WEBHOOK CONFIGURATION
+# TRUSTED CERTIFICATES
+# ============================================================
+#
+# Multiple certificates can be supplied for legitimate
+# signing-key rotation.
+#
+# Example:
+#
+# TRUSTED_CERT_SHA256=
+# abc123...,def456...
+#
+# ============================================================
+
+def load_trusted_certificates():
+
+    raw = os.environ.get(
+        "TRUSTED_CERT_SHA256",
+        ""
+    )
+
+    certificates = set()
+
+    for value in raw.split(","):
+
+        normalized = (
+            value
+            .replace(":", "")
+            .replace("-", "")
+            .replace(" ", "")
+            .strip()
+            .lower()
+        )
+
+        if normalized:
+
+            certificates.add(
+                normalized
+            )
+
+    return certificates
+
+
+TRUSTED_CERTIFICATES = (
+    load_trusted_certificates()
+)
+
+
+# ============================================================
+# DISCORD WEBHOOKS
 # ============================================================
 
 DISCORD_WEBHOOKS = {
 
-    "anticheat": os.environ.get(
-        "DISCORD_WEBHOOK_ANTICHEAT"
-    ),
+    "apk_modified":
+        os.environ.get(
+            "DISCORD_WEBHOOK_APK_MODIFIED"
+        ),
 
-    "reports": os.environ.get(
-        "DISCORD_WEBHOOK_REPORTS"
-    ),
+    "signature":
+        os.environ.get(
+            "DISCORD_WEBHOOK_SIGNATURE"
+        ),
 
-    "security": os.environ.get(
-        "DISCORD_WEBHOOK_SECURITY"
-    ),
+    "keystore":
+        os.environ.get(
+            "DISCORD_WEBHOOK_KEYSTORE"
+        ),
 
-    "auth": os.environ.get(
-        "DISCORD_WEBHOOK_AUTH"
-    ),
+    "attestation":
+        os.environ.get(
+            "DISCORD_WEBHOOK_ATTESTATION"
+        ),
 
-    "system": os.environ.get(
-        "DISCORD_WEBHOOK_SYSTEM"
-    ),
+    "device":
+        os.environ.get(
+            "DISCORD_WEBHOOK_DEVICE"
+        ),
+
+    "replay":
+        os.environ.get(
+            "DISCORD_WEBHOOK_REPLAY"
+        ),
+
+    "tamper":
+        os.environ.get(
+            "DISCORD_WEBHOOK_TAMPER"
+        ),
+
+    "critical":
+        os.environ.get(
+            "DISCORD_WEBHOOK_CRITICAL"
+        ),
+
+    "success":
+        os.environ.get(
+            "DISCORD_WEBHOOK_SUCCESS"
+        ),
+
+    "system":
+        os.environ.get(
+            "DISCORD_WEBHOOK_SYSTEM"
+        ),
+
 }
 
 
 # ============================================================
-# GENERAL DISCORD ALERT
+# DISCORD COLORS
 # ============================================================
 
-def send_discord_alert(category, message):
+DISCORD_COLORS = {
 
-    webhook = DISCORD_WEBHOOKS.get(category)
+    "info": 3447003,
+
+    "warning": 16776960,
+
+    "high": 16744192,
+
+    "critical": 15158332,
+
+    "success": 5763719,
+
+}
+
+
+# ============================================================
+# RUNTIME SECURITY STATE
+# ============================================================
+
+NONCES = {}
+
+SESSIONS = {}
+
+THREAT_EVENTS = {}
+
+
+NONCE_LIFETIME = int(
+    os.environ.get(
+        "NONCE_LIFETIME",
+        "120"
+    )
+)
+
+
+SESSION_LIFETIME = int(
+    os.environ.get(
+        "SESSION_LIFETIME",
+        "900"
+    )
+)
+
+
+# ============================================================
+# TIME
+# ============================================================
+
+def utc_timestamp():
+
+    return datetime.now(
+        timezone.utc
+    ).isoformat()
+
+
+# ============================================================
+# SAFE PLAYER IDENTIFIER
+# ============================================================
+
+def safe_player_id(
+    player_id
+):
+
+    if not player_id:
+
+        return "unknown"
+
+
+    value = str(
+        player_id
+    )
+
+
+    if len(value) > 128:
+
+        value = value[:128]
+
+
+    return value
+
+
+# ============================================================
+# DISCORD
+# ============================================================
+
+def send_discord(
+    category,
+    title,
+    description,
+    severity="info",
+    fields=None
+):
+
+    webhook = DISCORD_WEBHOOKS.get(
+        category
+    )
+
 
     if not webhook:
+
         return False
+
+
+    embed = {
+
+        "title":
+            title,
+
+        "description":
+            description,
+
+        "color":
+            DISCORD_COLORS.get(
+                severity,
+                DISCORD_COLORS["info"]
+            ),
+
+        "timestamp":
+            utc_timestamp(),
+
+        "footer": {
+
+            "text":
+                "Gorilla Guard Advanced"
+
+        },
+
+    }
+
+
+    if fields:
+
+        embed["fields"] = fields
+
+
+    payload = {
+
+        "username":
+            "Gorilla Guard",
+
+        "embeds": [
+            embed
+        ],
+
+    }
+
 
     try:
 
         response = requests.post(
+
             webhook,
-            json={
-                "content": message
-            },
-            timeout=5,
+
+            json=payload,
+
+            timeout=5
+
         )
 
-        return 200 <= response.status_code < 300
 
-    except requests.RequestException:
-
-        return False
-
-
-def security_event(category, message):
-
-    send_discord_alert(
-        category,
-        message
-    )
-
-
-# ============================================================
-# MOTHERSHIP V1
-# ============================================================
-
-MOTHERSHIP_V1 = {
-
-    "id": "mothership-v1",
-
-    "name": "Mothership V1",
-
-    "version": "V1",
-
-    "status": "available",
-
-    "status_text": "AVAILABLE",
-
-    "status_size": "normal",
-
-    "icon": "🚀",
-
-    "category": "Mothership",
-
-    "risk": "Critical",
-
-    "description": (
-        "Foundational server-side integrity "
-        "authentication with attestation, "
-        "package verification, device integrity "
-        "validation, and Discord pass/fail logging."
-    ),
-
-    "tags": [
-        "mothership",
-        "attestation",
-        "integrity",
-        "authentication",
-        "discord",
-    ],
-
-    "required_configuration": [
-        "titleid",
-        "meta_app_id",
-        "package_id",
-        "playfab_secret_key",
-        "meta_api_key",
-        "mothership_v1_pass_webhook",
-        "mothership_v1_fail_webhook",
-    ],
-
-    "code": r'''
-import os
-import base64
-import json
-import requests
-
-from flask import Flask, jsonify, request
-
-
-app = Flask(__name__)
-
-
-# ============================================================
-# CONFIGURATION
-# ============================================================
-
-PLAYFAB_TITLE_ID = os.environ.get(
-    "PLAYFAB_TITLE_ID",
-    "YOUR_TITLE_ID"
-)
-
-META_APP_ID = os.environ.get(
-    "META_APP_ID",
-    "YOUR_META_APP_ID"
-)
-
-PLAYFAB_SECRET_KEY = os.environ.get(
-    "PLAYFAB_SECRET_KEY",
-    "YOUR_PLAYFAB_SECRET_KEY"
-)
-
-META_API_KEY = os.environ.get(
-    "META_API_KEY",
-    "YOUR_META_API_KEY"
-)
-
-VALID_PACKAGE = os.environ.get(
-    "VALID_PACKAGE",
-    "YOUR_PACKAGE_ID"
-)
-
-
-# ============================================================
-# DISCORD WEBHOOK CONFIGURATION
-# ============================================================
-#
-# Put the real values in your server environment.
-#
-# PASS = successful authentication
-# FAIL = rejected authentication
-# ============================================================
-
-DISCORD_WEBHOOK_PASS = os.environ.get(
-    "MOTHERSHIP_V1_PASS_WEBHOOK",
-    "YOUR_MOTHERSHIP_V1_PASS_WEBHOOK"
-)
-
-DISCORD_WEBHOOK_FAIL = os.environ.get(
-    "MOTHERSHIP_V1_FAIL_WEBHOOK",
-    "YOUR_MOTHERSHIP_V1_FAIL_WEBHOOK"
-)
-
-
-# ============================================================
-# DISCORD HELPER
-# ============================================================
-
-def send_discord(webhook, message):
-
-    if not webhook:
-        return False
-
-    if webhook.startswith("YOUR_"):
-        return False
-
-    try:
-
-        response = requests.post(
-            webhook,
-            json={
-                "content": message
-            },
-            timeout=5,
+        return (
+            200
+            <= response.status_code
+            < 300
         )
 
-        return 200 <= response.status_code < 300
 
-    except requests.RequestException:
+    except requests.RequestException as exc:
+
+        logger.warning(
+            "Discord notification failed: %s",
+            exc
+        )
 
         return False
 
 
 # ============================================================
-# AUTHENTICATION FAILURE
+# SECURITY EVENT
 # ============================================================
 
-def authentication_failed(reason):
+def security_event(
+    category,
+    title,
+    description,
+    severity="warning",
+    player_id=None,
+    reason=None
+):
 
-    return jsonify({
+    fields = []
 
-        "success":
-            False,
 
-        "BanMessage":
-            "MOTHERSHIP V1 AUTHENTICATION FAILED. "
-            f"REASON: {reason}",
+    if player_id is not None:
 
-        "BanExpirationTime":
-            "Unknown",
+        fields.append({
 
-    }), 403
+            "name":
+                "Player",
 
+            "value":
+                f"`{safe_player_id(player_id)}`",
 
-# ============================================================
-# META ATTESTATION
-# ============================================================
+            "inline":
+                True,
 
-def verify_attestation(token):
+        })
 
-    if not token:
-        return None
 
-    if not META_API_KEY:
-        return None
+    if reason:
 
-    try:
+        fields.append({
 
-        response = requests.get(
+            "name":
+                "Reason",
 
-            "https://graph.oculus.com/"
-            "platform_integrity/verify",
+            "value":
+                str(reason)[:1024],
 
-            params={
+            "inline":
+                False,
 
-                "token":
-                    token,
-
-                "access_token":
-                    META_API_KEY,
-
-            },
-
-            timeout=5,
-        )
-
-        response.raise_for_status()
-
-        return response.json()
-
-    except requests.RequestException:
-
-        return None
-
-
-# ============================================================
-# CLAIM DECODER
-# ============================================================
-
-def decode_claims(claims):
-
-    if not claims:
-        return None
-
-    try:
-
-        padding = "=" * (
-            -len(claims) % 4
-        )
-
-        decoded = base64.urlsafe_b64decode(
-            claims + padding
-        )
-
-        return json.loads(
-            decoded.decode("utf-8")
-        )
-
-    except (
-        ValueError,
-        TypeError,
-        json.JSONDecodeError,
-    ):
-
-        return None
-
-
-# ============================================================
-# AUTHENTICATION
-# ============================================================
-
-@app.post(
-    "/v1/player/client/auth/complete/QUEST"
-)
-def mothership_auth():
-
-    body = request.get_json(
-        silent=True
-    ) or {}
-
-    user_id = str(
-        body.get(
-            "UserId",
-            ""
-        )
-    ).strip()
-
-    token = str(
-        body.get(
-            "AttestationToken",
-            ""
-        )
-    ).strip()
-
-
-    if not user_id:
-
-        send_discord(
-            DISCORD_WEBHOOK_FAIL,
-            "🔴 Gorilla Guard Mothership V1 FAIL\n"
-            "Reason: Missing UserId."
-        )
-
-        return authentication_failed(
-            "Missing UserId."
-        )
-
-
-    if not token:
-
-        send_discord(
-            DISCORD_WEBHOOK_FAIL,
-            f"🔴 Gorilla Guard Mothership V1 FAIL\n"
-            f"Player: {user_id}\n"
-            "Reason: Missing AttestationToken."
-        )
-
-        return authentication_failed(
-            "Missing AttestationToken."
-        )
-
-
-    data = verify_attestation(
-        token
-    )
-
-
-    if not data:
-
-        send_discord(
-            DISCORD_WEBHOOK_FAIL,
-            f"🔴 Gorilla Guard Mothership V1 FAIL\n"
-            f"Player: {user_id}\n"
-            "Reason: Attestation verification failed."
-        )
-
-        return authentication_failed(
-            "Attestation verification failed."
-        )
-
-
-    records = data.get(
-        "data",
-        []
-    )
-
-
-    if not records:
-
-        send_discord(
-            DISCORD_WEBHOOK_FAIL,
-            f"🔴 Gorilla Guard Mothership V1 FAIL\n"
-            f"Player: {user_id}\n"
-            "Reason: Attestation response contained no data."
-        )
-
-        return authentication_failed(
-            "Attestation response contained no data."
-        )
-
-
-    validation = records[0]
-
-
-    if validation.get(
-        "message"
-    ) != "success":
-
-        send_discord(
-            DISCORD_WEBHOOK_FAIL,
-            f"🔴 Gorilla Guard Mothership V1 FAIL\n"
-            f"Player: {user_id}\n"
-            "Reason: Attestation validation failed."
-        )
-
-        return authentication_failed(
-            "Attestation validation failed."
-        )
-
-
-    claims = decode_claims(
-        validation.get(
-            "claims"
-        )
-    )
-
-
-    if not claims:
-
-        send_discord(
-            DISCORD_WEBHOOK_FAIL,
-            f"🔴 Gorilla Guard Mothership V1 FAIL\n"
-            f"Player: {user_id}\n"
-            "Reason: Invalid attestation claims."
-        )
-
-        return authentication_failed(
-            "Invalid attestation claims."
-        )
-
-
-    app_state = claims.get(
-        "app_state",
-        {}
-    )
-
-    device_state = claims.get(
-        "device_state",
-        {}
-    )
-
-
-    package_id = app_state.get(
-        "package_id"
-    )
-
-    package_digest = app_state.get(
-        "package_cert_sha256_digest"
-    )
-
-    integrity_state = device_state.get(
-        "device_integrity_state"
-    )
-
-    unique_id = device_state.get(
-        "unique_id"
-    )
-
-
-    if not package_id:
-
-        send_discord(
-            DISCORD_WEBHOOK_FAIL,
-            f"🔴 Gorilla Guard Mothership V1 FAIL\n"
-            f"Player: {user_id}\n"
-            "Reason: Package ID missing."
-        )
-
-        return authentication_failed(
-            "Package ID missing."
-        )
-
-
-    if package_id != VALID_PACKAGE:
-
-        send_discord(
-            DISCORD_WEBHOOK_FAIL,
-            f"🔴 Gorilla Guard Mothership V1 FAIL\n"
-            f"Player: {user_id}\n"
-            "Reason: Package ID mismatch."
-        )
-
-        return authentication_failed(
-            "Package ID does not match the configured application."
-        )
-
-
-    if not package_digest:
-
-        send_discord(
-            DISCORD_WEBHOOK_FAIL,
-            f"🔴 Gorilla Guard Mothership V1 FAIL\n"
-            f"Player: {user_id}\n"
-            "Reason: Package certificate digest missing."
-        )
-
-        return authentication_failed(
-            "Package certificate digest missing."
-        )
-
-
-    if not unique_id:
-
-        send_discord(
-            DISCORD_WEBHOOK_FAIL,
-            f"🔴 Gorilla Guard Mothership V1 FAIL\n"
-            f"Player: {user_id}\n"
-            "Reason: Device identity missing."
-        )
-
-        return authentication_failed(
-            "Device identity missing."
-        )
-
-
-    if integrity_state != "Advanced":
-
-        send_discord(
-            DISCORD_WEBHOOK_FAIL,
-            f"🔴 Gorilla Guard Mothership V1 FAIL\n"
-            f"Player: {user_id}\n"
-            "Reason: Device integrity was not trusted."
-        )
-
-        return authentication_failed(
-            "Device integrity was not trusted."
-        )
+        })
 
 
     send_discord(
-        DISCORD_WEBHOOK_PASS,
-        f"🟢 Gorilla Guard Mothership V1 PASS\n"
-        f"Player: {user_id}\n"
-        "Status: Integrity authentication passed."
+
+        category,
+
+        title,
+
+        description,
+
+        severity,
+
+        fields
+
     )
 
 
-    return jsonify({
-
-        "success":
-            True,
-
-        "product":
-            "Gorilla Guard Mothership V1",
-
-        "message":
-            "Integrity authentication passed.",
-
-    })
-
-
-if __name__ == "__main__":
-
-    app.run(
-        host="0.0.0.0",
-        port=int(
-            os.environ.get(
-                "PORT",
-                7080
-            )
-        )
-    )
-''',
-}
-
-
 # ============================================================
-# MOTHERSHIP V2
+# CONFIGURATION VALIDATION
 # ============================================================
 
-MOTHERSHIP_V2 = {
+def security_configuration_ready():
 
-    "id": "mothership-v2",
-
-    "name": "Mothership V2",
-
-    "version": "V2",
-
-    "status": "available",
-
-    "status_text": "AVAILABLE",
-
-    "status_size": "normal",
-
-    "icon": "🚀",
-
-    "category": "Mothership",
-
-    "risk": "Critical",
-
-    "description": (
-        "Enhanced Mothership authentication with "
-        "nonce-based replay resistance, stricter "
-        "attestation validation, package verification, "
-        "device validation, and Discord pass/fail logging."
-    ),
-
-    "tags": [
-        "mothership",
-        "attestation",
-        "nonce",
-        "replay",
-        "integrity",
-        "discord",
-    ],
-
-    "required_configuration": [
-        "titleid",
-        "meta_app_id",
-        "package_id",
-        "playfab_secret_key",
-        "meta_api_key",
-        "mothership_v2_pass_webhook",
-        "mothership_v2_fail_webhook",
-    ],
-
-    "code": r'''
-import os
-import base64
-import json
-import secrets
-import time
-import hashlib
-import requests
-
-from flask import Flask, jsonify, request
-
-
-app = Flask(__name__)
-
-
-# ============================================================
-# CONFIGURATION
-# ============================================================
-
-PLAYFAB_TITLE_ID = os.environ.get(
-    "PLAYFAB_TITLE_ID",
-    "YOUR_TITLE_ID"
-)
-
-META_APP_ID = os.environ.get(
-    "META_APP_ID",
-    "YOUR_META_APP_ID"
-)
-
-PLAYFAB_SECRET_KEY = os.environ.get(
-    "PLAYFAB_SECRET_KEY",
-    "YOUR_PLAYFAB_SECRET_KEY"
-)
-
-META_API_KEY = os.environ.get(
-    "META_API_KEY",
-    "YOUR_META_API_KEY"
-)
-
-VALID_PACKAGE = os.environ.get(
-    "VALID_PACKAGE",
-    "YOUR_PACKAGE_ID"
-)
-
-
-# ============================================================
-# DISCORD WEBHOOK CONFIGURATION
-# ============================================================
-
-DISCORD_WEBHOOK_PASS = os.environ.get(
-    "MOTHERSHIP_V2_PASS_WEBHOOK",
-    "YOUR_MOTHERSHIP_V2_PASS_WEBHOOK"
-)
-
-DISCORD_WEBHOOK_FAIL = os.environ.get(
-    "MOTHERSHIP_V2_FAIL_WEBHOOK",
-    "YOUR_MOTHERSHIP_V2_FAIL_WEBHOOK"
-)
-
-
-# ============================================================
-# DISCORD HELPER
-# ============================================================
-
-def send_discord(webhook, message):
-
-    if not webhook:
-        return False
-
-    if webhook.startswith("YOUR_"):
-        return False
-
-    try:
-
-        response = requests.post(
-            webhook,
-            json={
-                "content": message
-            },
-            timeout=5,
-        )
-
-        return 200 <= response.status_code < 300
-
-    except requests.RequestException:
+    if not CONFIG["package_id"]:
 
         return False
 
 
+    if not TRUSTED_CERTIFICATES:
+
+        return False
+
+
+    for certificate in TRUSTED_CERTIFICATES:
+
+        if not valid_sha256(
+            certificate
+        ):
+
+            return False
+
+
+    return True
+
+
 # ============================================================
-# SECURITY STATE
+# SHA-256
 # ============================================================
 
-pending_nonces = {}
-
-NONCE_LIFETIME = 120
-
-
-# ============================================================
-# FAILURE
-# ============================================================
-
-def authentication_failed(
-    reason,
-    user_id=""
+def normalize_certificate(
+    certificate
 ):
 
-    if user_id:
+    if not isinstance(
+        certificate,
+        str
+    ):
 
-        send_discord(
-            DISCORD_WEBHOOK_FAIL,
-            f"🔴 Gorilla Guard Mothership V2 FAIL\n"
-            f"Player: {user_id}\n"
-            f"Reason: {reason}"
+        return ""
+
+
+    return (
+        certificate
+        .replace(":", "")
+        .replace("-", "")
+        .replace(" ", "")
+        .replace("\n", "")
+        .replace("\r", "")
+        .strip()
+        .lower()
+    )
+
+
+def valid_sha256(
+    certificate
+):
+
+    value = normalize_certificate(
+        certificate
+    )
+
+
+    if len(value) != 64:
+
+        return False
+
+
+    return bool(
+        re.fullmatch(
+            r"[0-9a-f]{64}",
+            value
         )
-
-    else:
-
-        send_discord(
-            DISCORD_WEBHOOK_FAIL,
-            f"🔴 Gorilla Guard Mothership V2 FAIL\n"
-            f"Reason: {reason}"
-        )
-
-
-    return jsonify({
-
-        "success":
-            False,
-
-        "BanMessage":
-            "MOTHERSHIP V2 AUTHENTICATION FAILED. "
-            f"REASON: {reason}",
-
-        "BanExpirationTime":
-            "Unknown",
-
-    }), 403
+    )
 
 
 # ============================================================
-# NONCES
+# CONSTANT-TIME CERTIFICATE CHECK
 # ============================================================
 
-def create_nonce(user_id):
+def certificate_is_trusted(
+    certificate
+):
+
+    normalized = normalize_certificate(
+        certificate
+    )
+
+
+    if not valid_sha256(
+        normalized
+    ):
+
+        return False
+
+
+    for trusted in TRUSTED_CERTIFICATES:
+
+        if hmac.compare_digest(
+            normalized,
+            trusted
+        ):
+
+            return True
+
+
+    return False
+
+
+# ============================================================
+# PACKAGE CHECK
+# ============================================================
+
+def verify_package(
+    package_id
+):
+
+    if not package_id:
+
+        return False
+
+
+    if not CONFIG["package_id"]:
+
+        return False
+
+
+    return hmac.compare_digest(
+
+        str(package_id),
+
+        str(CONFIG["package_id"])
+
+    )
+
+
+# ============================================================
+# NONCE SYSTEM
+# ============================================================
+
+def create_nonce(
+    player_id
+):
+
+    player_id = safe_player_id(
+        player_id
+    )
+
 
     nonce = secrets.token_urlsafe(
         32
     )
 
-    pending_nonces[user_id] = {
+
+    NONCES[player_id] = {
 
         "nonce":
             nonce,
@@ -832,17 +663,28 @@ def create_nonce(user_id):
 
     }
 
+
     return nonce
 
 
-def get_nonce(user_id):
+def consume_nonce(
+    player_id,
+    supplied_nonce
+):
 
-    record = pending_nonces.get(
-        user_id
+    player_id = safe_player_id(
+        player_id
     )
 
+
+    record = NONCES.get(
+        player_id
+    )
+
+
     if not record:
-        return None
+
+        return False
 
 
     if (
@@ -851,96 +693,1005 @@ def get_nonce(user_id):
         > NONCE_LIFETIME
     ):
 
-        pending_nonces.pop(
-            user_id,
+        NONCES.pop(
+            player_id,
             None
         )
 
-        return None
+        return False
 
 
-    return record["nonce"]
+    expected = record[
+        "nonce"
+    ]
 
 
-def consume_nonce(user_id):
+    valid = hmac.compare_digest(
 
-    pending_nonces.pop(
-        user_id,
-        None
+        str(supplied_nonce or ""),
+
+        str(expected)
+
+    )
+
+
+    if valid:
+
+        NONCES.pop(
+            player_id,
+            None
+        )
+
+
+    return valid
+
+
+# ============================================================
+# SESSION SYSTEM
+# ============================================================
+
+def create_session(
+    player_id,
+    threat_score
+):
+
+    session_id = secrets.token_urlsafe(
+        48
+    )
+
+
+    SESSIONS[session_id] = {
+
+        "player_id":
+            safe_player_id(
+                player_id
+            ),
+
+        "created":
+            time.time(),
+
+        "expires":
+            time.time()
+            + SESSION_LIFETIME,
+
+        "threat_score":
+            threat_score,
+
+    }
+
+
+    return session_id
+
+
+def validate_session(
+    session_id,
+    player_id
+):
+
+    if not session_id:
+
+        return False
+
+
+    session = SESSIONS.get(
+        session_id
+    )
+
+
+    if not session:
+
+        return False
+
+
+    if (
+        time.time()
+        > session["expires"]
+    ):
+
+        SESSIONS.pop(
+            session_id,
+            None
+        )
+
+        return False
+
+
+    return hmac.compare_digest(
+
+        str(
+            session["player_id"]
+        ),
+
+        str(
+            player_id
+        )
+
     )
 
 
 # ============================================================
-# ATTESTATION
+# THREAT SCORING
 # ============================================================
 
-def verify_attestation(token):
+def threat_level(
+    score
+):
 
-    if not token:
-        return None
+    if score >= 90:
 
-    if not META_API_KEY:
-        return None
+        return "CRITICAL"
 
-    try:
 
-        response = requests.get(
+    if score >= 70:
 
-            "https://graph.oculus.com/"
-            "platform_integrity/verify",
+        return "HIGH"
 
-            params={
 
-                "token":
-                    token,
+    if score >= 40:
 
-                "access_token":
-                    META_API_KEY,
+        return "MEDIUM"
 
-            },
 
-            timeout=5,
+    return "LOW"
+
+
+def calculate_threat_score(
+    findings
+):
+
+    weights = {
+
+        "package":
+            50,
+
+        "signature":
+            80,
+
+        "attestation":
+            60,
+
+        "device":
+            40,
+
+        "replay":
+            75,
+
+        "tamper":
+            70,
+
+        "build":
+            35,
+
+        "session":
+            45,
+
+    }
+
+
+    score = 0
+
+
+    for finding in findings:
+
+        score += weights.get(
+            finding,
+            20
         )
 
-        response.raise_for_status()
 
-        return response.json()
-
-    except requests.RequestException:
-
-        return None
+    return min(
+        score,
+        100
+    )
 
 
 # ============================================================
-# CLAIM DECODER
+# BUILD / APPLICATION STATE
 # ============================================================
 
-def decode_claims(claims):
+def inspect_application_state(
+    app_state
+):
 
-    if not claims:
-        return None
+    findings = []
 
-    try:
 
-        padding = "=" * (
-            -len(claims) % 4
-        )
-
-        decoded = base64.urlsafe_b64decode(
-            claims + padding
-        )
-
-        return json.loads(
-            decoded.decode("utf-8")
-        )
-
-    except (
-        ValueError,
-        TypeError,
-        json.JSONDecodeError,
+    if not isinstance(
+        app_state,
+        dict
     ):
 
-        return None
+        findings.append(
+            "build"
+        )
+
+        return findings
+
+
+    package_id = app_state.get(
+        "package_id"
+    )
+
+
+    certificate = app_state.get(
+        "package_cert_sha256_digest"
+    )
+
+
+    build_id = app_state.get(
+        "build_id"
+    )
+
+
+    version = app_state.get(
+        "version"
+    )
+
+
+    # Package
+
+    if not verify_package(
+        package_id
+    ):
+
+        findings.append(
+            "package"
+        )
+
+
+    # Certificate
+
+    if not certificate:
+
+        findings.append(
+            "signature"
+        )
+
+    elif not valid_sha256(
+        certificate
+    ):
+
+        findings.append(
+            "signature"
+        )
+
+    elif not certificate_is_trusted(
+        certificate
+    ):
+
+        findings.append(
+            "signature"
+        )
+
+
+    # Build metadata
+
+    if build_id is not None:
+
+        if not isinstance(
+            build_id,
+            str
+        ):
+
+            findings.append(
+                "build"
+            )
+
+
+    if version is not None:
+
+        if not isinstance(
+            version,
+            str
+        ):
+
+            findings.append(
+                "build"
+            )
+
+
+    return findings
+
+
+# ============================================================
+# DEVICE STATE
+# ============================================================
+
+def inspect_device_state(
+    device_state
+):
+
+    findings = []
+
+
+    if not isinstance(
+        device_state,
+        dict
+    ):
+
+        findings.append(
+            "device"
+        )
+
+        return findings
+
+
+    integrity = device_state.get(
+        "device_integrity_state"
+    )
+
+
+    unique_id = device_state.get(
+        "unique_id"
+    )
+
+
+    if not unique_id:
+
+        findings.append(
+            "device"
+        )
+
+
+    if integrity:
+
+        accepted = {
+
+            "Advanced",
+            "Basic",
+            "Standard",
+
+        }
+
+
+        if integrity not in accepted:
+
+            findings.append(
+                "device"
+            )
+
+
+    return findings
+
+
+# ============================================================
+# TAMPER / INCONSISTENCY CHECKS
+# ============================================================
+
+def detect_tampering(
+    claims
+):
+
+    findings = []
+
+
+    if not isinstance(
+        claims,
+        dict
+    ):
+
+        findings.append(
+            "tamper"
+        )
+
+        return findings
+
+
+    app_state = claims.get(
+        "app_state",
+        {}
+    )
+
+
+    device_state = claims.get(
+        "device_state",
+        {}
+    )
+
+
+    # Application and device state must both
+    # be structured objects.
+
+    if not isinstance(
+        app_state,
+        dict
+    ):
+
+        findings.append(
+            "tamper"
+        )
+
+
+    if not isinstance(
+        device_state,
+        dict
+    ):
+
+        findings.append(
+            "tamper"
+        )
+
+
+    # A package identifier should not be empty
+    # when an attestation result claims to be valid.
+
+    if isinstance(
+        app_state,
+        dict
+    ):
+
+        if not app_state.get(
+            "package_id"
+        ):
+
+            findings.append(
+                "tamper"
+            )
+
+
+    # Device identity should accompany device
+    # integrity information.
+
+    if isinstance(
+        device_state,
+        dict
+    ):
+
+        integrity = device_state.get(
+            "device_integrity_state"
+        )
+
+        unique_id = device_state.get(
+            "unique_id"
+        )
+
+
+        if integrity and not unique_id:
+
+            findings.append(
+                "tamper"
+            )
+
+
+    return findings
+
+
+# ============================================================
+# ATTESTATION RESULT
+# ============================================================
+
+def inspect_attestation(
+    attestation
+):
+
+    findings = []
+
+
+    if not isinstance(
+        attestation,
+        dict
+    ):
+
+        findings.append(
+            "attestation"
+        )
+
+        return findings
+
+
+    records = attestation.get(
+        "data",
+        []
+    )
+
+
+    if not isinstance(
+        records,
+        list
+    ):
+
+        findings.append(
+            "attestation"
+        )
+
+        return findings
+
+
+    if not records:
+
+        findings.append(
+            "attestation"
+        )
+
+        return findings
+
+
+    record = records[0]
+
+
+    if not isinstance(
+        record,
+        dict
+    ):
+
+        findings.append(
+            "attestation"
+        )
+
+        return findings
+
+
+    if record.get(
+        "message"
+    ) != "success":
+
+        findings.append(
+            "attestation"
+        )
+
+
+    return findings
+
+
+# ============================================================
+# SECURITY DECISION
+# ============================================================
+
+def security_decision(
+    level,
+    findings
+):
+
+    # Remove duplicates.
+
+    findings = list(
+        dict.fromkeys(
+            findings
+        )
+    )
+
+
+    score = calculate_threat_score(
+        findings
+    )
+
+
+    # --------------------------------------------------------
+    # ADVANCED
+    # --------------------------------------------------------
+
+    if level >= 1:
+
+        if (
+            "package"
+            in findings
+        ):
+
+            return False, score
+
+
+        if (
+            "signature"
+            in findings
+        ):
+
+            return False, score
+
+
+    # --------------------------------------------------------
+    # ELITE
+    # --------------------------------------------------------
+
+    if level >= 2:
+
+        if (
+            "attestation"
+            in findings
+        ):
+
+            return False, score
+
+
+        if (
+            "replay"
+            in findings
+        ):
+
+            return False, score
+
+
+        if (
+            "session"
+            in findings
+        ):
+
+            return False, score
+
+
+    # --------------------------------------------------------
+    # VIP
+    # --------------------------------------------------------
+
+    if level >= 3:
+
+        if (
+            "tamper"
+            in findings
+        ):
+
+            return False, score
+
+
+        if score >= 70:
+
+            return False, score
+
+
+    # --------------------------------------------------------
+    # MAXIMUM
+    # --------------------------------------------------------
+
+    if level >= 4:
+
+        if (
+            "device"
+            in findings
+        ):
+
+            return False, score
+
+
+        if score > 0:
+
+            return False, score
+
+
+    return True, score
+
+
+# ============================================================
+# DETAILED SECURITY ALERTS
+# ============================================================
+
+def send_detection_alerts(
+    player_id,
+    package_id,
+    findings,
+    score
+):
+
+    level = threat_level(
+        score
+    )
+
+
+    for finding in findings:
+
+        if finding == "package":
+
+            security_event(
+
+                "signature",
+
+                "📦 PACKAGE ID MISMATCH",
+
+                (
+                    "The submitted application "
+                    "package does not match the "
+                    "configured production package."
+                ),
+
+                "critical",
+
+                player_id,
+
+                f"Received package: "
+                f"{package_id or 'missing'}"
+
+            )
+
+
+        elif finding == "signature":
+
+            security_event(
+
+                "apk_modified",
+
+                "🚨 UNTRUSTED APK SIGNATURE",
+
+                (
+                    "The application signing "
+                    "certificate could not be "
+                    "matched against the trusted "
+                    "certificate set."
+                ),
+
+                "critical",
+
+                player_id,
+
+                "Possible modified or re-signed APK."
+
+            )
+
+
+            security_event(
+
+                "keystore",
+
+                "🔐 SIGNING-KEY VERIFICATION FAILED",
+
+                (
+                    "The application's verifiable "
+                    "signing identity was not "
+                    "recognized as trusted."
+                ),
+
+                "high",
+
+                player_id,
+
+                "Certificate verification failed."
+
+            )
+
+
+        elif finding == "attestation":
+
+            security_event(
+
+                "attestation",
+
+                "🛡️ ATTESTATION VERIFICATION FAILED",
+
+                (
+                    "Platform integrity information "
+                    "could not be accepted."
+                ),
+
+                "high",
+
+                player_id,
+
+                "Attestation validation failed."
+
+            )
+
+
+        elif finding == "device":
+
+            security_event(
+
+                "device",
+
+                "📱 DEVICE INTEGRITY WARNING",
+
+                (
+                    "The device integrity information "
+                    "did not satisfy the selected "
+                    "security policy."
+                ),
+
+                "high",
+
+                player_id,
+
+                "Device integrity check failed."
+
+            )
+
+
+        elif finding == "replay":
+
+            security_event(
+
+                "replay",
+
+                "🔄 REPLAY ATTACK DETECTED",
+
+                (
+                    "A nonce was missing, expired, "
+                    "or had already been consumed."
+                ),
+
+                "critical",
+
+                player_id,
+
+                "Authentication replay protection triggered."
+
+            )
+
+
+        elif finding == "tamper":
+
+            security_event(
+
+                "tamper",
+
+                "⚠️ INTEGRITY STATE INCONSISTENCY",
+
+                (
+                    "Multiple supplied security "
+                    "signals were inconsistent."
+                ),
+
+                "critical",
+
+                player_id,
+
+                "Possible tampering or malformed security data."
+
+            )
+
+
+        elif finding == "build":
+
+            security_event(
+
+                "tamper",
+
+                "🏗️ BUILD INTEGRITY WARNING",
+
+                (
+                    "Application build metadata "
+                    "was inconsistent with the "
+                    "expected structure."
+                ),
+
+                "warning",
+
+                player_id,
+
+                "Build integrity check failed."
+
+            )
+
+
+        elif finding == "session":
+
+            security_event(
+
+                "replay",
+
+                "🔒 SESSION VALIDATION FAILED",
+
+                (
+                    "The supplied authentication "
+                    "session could not be validated."
+                ),
+
+                "high",
+
+                player_id,
+
+                "Session invalid or expired."
+
+            )
+
+
+    if score >= 90:
+
+        security_event(
+
+            "critical",
+
+            "🚨 CRITICAL THREAT SCORE",
+
+            (
+                "Gorilla Guard calculated a critical "
+                "security threat score."
+            ),
+
+            "critical",
+
+            player_id,
+
+            f"Threat score: {score}/100"
+
+        )
+
+
+# ============================================================
+# AUTH DECORATOR
+# ============================================================
+
+def require_level(
+    minimum_level
+):
+
+    def decorator(
+        function
+    ):
+
+        @wraps(function)
+        def wrapper(
+            *args,
+            **kwargs
+        ):
+
+            if DEFAULT_SECURITY_LEVEL < minimum_level:
+
+                return jsonify({
+
+                    "success":
+                        False,
+
+                    "error":
+                        "Security level unavailable."
+
+                }), 403
+
+
+            return function(
+                *args,
+                **kwargs
+            )
+
+
+        return wrapper
+
+
+    return decorator
+
+
+# ============================================================
+# HEALTH
+# ============================================================
+
+@app.get("/")
+def home():
+
+    return jsonify({
+
+        "service":
+            "Gorilla Guard Advanced",
+
+        "status":
+            "online",
+
+        "security_level":
+            DEFAULT_SECURITY_LEVEL,
+
+        "security_level_name":
+            SECURITY_LEVELS[
+                DEFAULT_SECURITY_LEVEL
+            ]["name"],
+
+    })
+
+
+# ============================================================
+# SECURITY LEVELS
+# ============================================================
+
+@app.get(
+    "/api/security/levels"
+)
+def security_levels():
+
+    return jsonify({
+
+        "current":
+            DEFAULT_SECURITY_LEVEL,
+
+        "levels": [
+
+            {
+                "level":
+                    number,
+
+                "name":
+                    data["name"],
+
+            }
+
+            for number, data
+            in SECURITY_LEVELS.items()
+
+        ],
+
+    })
 
 
 # ============================================================
@@ -948,36 +1699,45 @@ def decode_claims(claims):
 # ============================================================
 
 @app.post(
-    "/v2/player/client/auth/nonce"
+    "/api/security/nonce"
 )
-def request_nonce():
+@require_level(2)
+def issue_nonce():
 
     body = request.get_json(
         silent=True
     ) or {}
 
-    user_id = str(
+
+    player_id = safe_player_id(
         body.get(
-            "UserId",
-            ""
+            "UserId"
         )
-    ).strip()
+    )
 
 
-    if not user_id:
+    if player_id == "unknown":
 
         return jsonify({
+
+            "success":
+                False,
+
             "error":
-                "Missing UserId."
+                "UserId is required."
+
         }), 400
 
 
     nonce = create_nonce(
-        user_id
+        player_id
     )
 
 
     return jsonify({
+
+        "success":
+            True,
 
         "nonce":
             nonce,
@@ -989,133 +1749,102 @@ def request_nonce():
 
 
 # ============================================================
-# AUTHENTICATION
+# MAIN VERIFICATION
 # ============================================================
 
 @app.post(
-    "/v2/player/client/auth/complete/QUEST"
+    "/api/security/verify"
 )
-def mothership_auth():
+def verify():
 
     body = request.get_json(
         silent=True
     ) or {}
 
 
-    user_id = str(
+    player_id = safe_player_id(
         body.get(
-            "UserId",
-            ""
+            "UserId"
         )
-    ).strip()
-
-    token = str(
-        body.get(
-            "AttestationToken",
-            ""
-        )
-    ).strip()
-
-    client_nonce = str(
-        body.get(
-            "Nonce",
-            ""
-        )
-    ).strip()
-
-
-    if not user_id:
-
-        return authentication_failed(
-            "Missing UserId."
-        )
-
-
-    if not token:
-
-        return authentication_failed(
-            "Missing AttestationToken.",
-            user_id
-        )
-
-
-    expected_nonce = get_nonce(
-        user_id
     )
 
 
-    if not expected_nonce:
+    claims = body.get(
+        "claims",
+        {}
+    )
 
-        return authentication_failed(
-            "Nonce expired or does not exist.",
-            user_id
+
+    attestation = body.get(
+        "attestation"
+    )
+
+
+    supplied_nonce = body.get(
+        "Nonce"
+    )
+
+
+    session_id = body.get(
+        "SessionId"
+    )
+
+
+    findings = []
+
+
+    # --------------------------------------------------------
+    # Configuration
+    # --------------------------------------------------------
+
+    if not security_configuration_ready():
+
+        security_event(
+
+            "critical",
+
+            "⚙️ SECURITY CONFIGURATION ERROR",
+
+            (
+                "Gorilla Guard is not configured "
+                "with a production package and "
+                "trusted signing certificate."
+            ),
+
+            "critical",
+
+            player_id,
+
+            "Server security configuration incomplete."
+
         )
 
 
-    if not secrets.compare_digest(
-        client_nonce,
-        expected_nonce
+        return jsonify({
+
+            "success":
+                False,
+
+            "error":
+                "Security configuration incomplete."
+
+        }), 503
+
+
+    # --------------------------------------------------------
+    # Claims
+    # --------------------------------------------------------
+
+    if not isinstance(
+        claims,
+        dict
     ):
 
-        return authentication_failed(
-            "Nonce mismatch.",
-            user_id
+        findings.append(
+            "tamper"
         )
 
-
-    data = verify_attestation(
-        token
-    )
-
-
-    if not data:
-
-        return authentication_failed(
-            "Attestation verification failed.",
-            user_id
-        )
-
-
-    records = data.get(
-        "data",
-        []
-    )
-
-
-    if not records:
-
-        return authentication_failed(
-            "Attestation response was empty.",
-            user_id
-        )
-
-
-    validation = records[0]
-
-
-    if validation.get(
-        "message"
-    ) != "success":
-
-        return authentication_failed(
-            "Attestation validation failed.",
-            user_id
-        )
-
-
-    claims = decode_claims(
-        validation.get(
-            "claims"
-        )
-    )
-
-
-    if not claims:
-
-        return authentication_failed(
-            "Invalid attestation claims.",
-            user_id
-        )
+        claims = {}
 
 
     app_state = claims.get(
@@ -1123,85 +1852,310 @@ def mothership_auth():
         {}
     )
 
+
     device_state = claims.get(
         "device_state",
         {}
     )
 
 
-    package_id = app_state.get(
-        "package_id"
-    )
+    # --------------------------------------------------------
+    # Application checks
+    # --------------------------------------------------------
 
-    package_digest = app_state.get(
-        "package_cert_sha256_digest"
-    )
-
-    integrity_state = device_state.get(
-        "device_integrity_state"
-    )
-
-    unique_id = device_state.get(
-        "unique_id"
+    findings.extend(
+        inspect_application_state(
+            app_state
+        )
     )
 
 
-    if not package_id:
+    # --------------------------------------------------------
+    # Device checks
+    # --------------------------------------------------------
 
-        return authentication_failed(
-            "Package ID missing.",
-            user_id
+    if DEFAULT_SECURITY_LEVEL >= 2:
+
+        findings.extend(
+            inspect_device_state(
+                device_state
+            )
         )
 
 
-    if package_id != VALID_PACKAGE:
+    # --------------------------------------------------------
+    # Tamper checks
+    # --------------------------------------------------------
 
-        return authentication_failed(
-            "Package ID mismatch.",
-            user_id
+    if DEFAULT_SECURITY_LEVEL >= 3:
+
+        findings.extend(
+            detect_tampering(
+                claims
+            )
         )
 
 
-    if not package_digest:
+    # --------------------------------------------------------
+    # Attestation
+    # --------------------------------------------------------
 
-        return authentication_failed(
-            "Package certificate digest missing.",
-            user_id
+    if DEFAULT_SECURITY_LEVEL >= 2:
+
+        findings.extend(
+            inspect_attestation(
+                attestation
+            )
         )
 
 
-    if not unique_id:
+    # --------------------------------------------------------
+    # Replay protection
+    # --------------------------------------------------------
 
-        return authentication_failed(
-            "Device identity missing.",
-            user_id
+    if DEFAULT_SECURITY_LEVEL >= 2:
+
+        if not consume_nonce(
+            player_id,
+            supplied_nonce
+        ):
+
+            findings.append(
+                "replay"
+            )
+
+
+    # --------------------------------------------------------
+    # Session
+    # --------------------------------------------------------
+
+    if DEFAULT_SECURITY_LEVEL >= 2:
+
+        if session_id:
+
+            if not validate_session(
+                session_id,
+                player_id
+            ):
+
+                findings.append(
+                    "session"
+                )
+
+
+    # --------------------------------------------------------
+    # Deduplicate
+    # --------------------------------------------------------
+
+    findings = list(
+        dict.fromkeys(
+            findings
         )
-
-
-    if integrity_state != "Advanced":
-
-        return authentication_failed(
-            "Device integrity was not trusted.",
-            user_id
-        )
-
-
-    consume_nonce(
-        user_id
     )
 
 
-    device_reference = hashlib.sha256(
-        unique_id.encode("utf-8")
-    ).hexdigest()[:24]
+    # --------------------------------------------------------
+    # Threat score
+    # --------------------------------------------------------
+
+    score = calculate_threat_score(
+        findings
+    )
+
+
+    # --------------------------------------------------------
+    # Alerts
+    # --------------------------------------------------------
+
+    if findings:
+
+        package_id = None
+
+
+        if isinstance(
+            app_state,
+            dict
+        ):
+
+            package_id = app_state.get(
+                "package_id"
+            )
+
+
+        send_detection_alerts(
+
+            player_id,
+
+            package_id,
+
+            findings,
+
+            score
+
+        )
+
+
+    # --------------------------------------------------------
+    # Security decision
+    # --------------------------------------------------------
+
+    allowed, score = security_decision(
+
+        DEFAULT_SECURITY_LEVEL,
+
+        findings
+
+    )
+
+
+    # --------------------------------------------------------
+    # Rejected
+    # --------------------------------------------------------
+
+    if not allowed:
+
+        return jsonify({
+
+            "success":
+                False,
+
+            "authenticated":
+                False,
+
+            "security_level":
+                DEFAULT_SECURITY_LEVEL,
+
+            "security_level_name":
+                SECURITY_LEVELS[
+                    DEFAULT_SECURITY_LEVEL
+                ]["name"],
+
+            "threat_score":
+                score,
+
+            "threat_level":
+                threat_level(score),
+
+            "detections":
+                findings,
+
+            "message":
+                "Security verification failed.",
+
+        }), 403
+
+
+    # --------------------------------------------------------
+    # Session creation
+    # --------------------------------------------------------
+
+    session = create_session(
+
+        player_id,
+
+        score
+
+    )
+
+
+    # --------------------------------------------------------
+    # SUCCESS ALERT
+    # --------------------------------------------------------
+
+    package_id = None
+
+
+    if isinstance(
+        app_state,
+        dict
+    ):
+
+        package_id = app_state.get(
+            "package_id"
+        )
 
 
     send_discord(
-        DISCORD_WEBHOOK_PASS,
-        f"🟢 Gorilla Guard Mothership V2 PASS\n"
-        f"Player: {user_id}\n"
-        f"Device Reference: {device_reference}\n"
-        "Status: Enhanced integrity authentication passed."
+
+        "success",
+
+        "🟢 GORILLA GUARD VERIFICATION PASSED",
+
+        (
+            "The application successfully "
+            "passed the selected Gorilla Guard "
+            "security policy."
+        ),
+
+        "success",
+
+        fields=[
+
+            {
+                "name":
+                    "Player",
+
+                "value":
+                    f"`{player_id}`",
+
+                "inline":
+                    True,
+
+            },
+
+            {
+                "name":
+                    "Security Level",
+
+                "value":
+                    (
+                        f"{DEFAULT_SECURITY_LEVEL} — "
+                        f"{SECURITY_LEVELS[DEFAULT_SECURITY_LEVEL]['name']}"
+                    ),
+
+                "inline":
+                    True,
+
+            },
+
+            {
+                "name":
+                    "Threat Score",
+
+                "value":
+                    f"{score}/100",
+
+                "inline":
+                    True,
+
+            },
+
+            {
+                "name":
+                    "Package",
+
+                "value":
+                    f"`{package_id or 'unknown'}`",
+
+                "inline":
+                    False,
+
+            },
+
+            {
+                "name":
+                    "Result",
+
+                "value":
+                    "✅ AUTHENTICATED",
+
+                "inline":
+                    False,
+
+            },
+
+        ]
+
     )
 
 
@@ -1210,351 +2164,110 @@ def mothership_auth():
         "success":
             True,
 
-        "product":
-            "Gorilla Guard Mothership V2",
+        "authenticated":
+            True,
 
-        "device_reference":
-            device_reference,
+        "security_level":
+            DEFAULT_SECURITY_LEVEL,
+
+        "security_level_name":
+            SECURITY_LEVELS[
+                DEFAULT_SECURITY_LEVEL
+            ]["name"],
+
+        "threat_score":
+            score,
+
+        "threat_level":
+            threat_level(score),
+
+        "session_id":
+            session,
 
         "message":
-            "Enhanced integrity authentication passed.",
+            "Security verification passed.",
 
     })
 
 
-if __name__ == "__main__":
+# ============================================================
+# SESSION CHECK
+# ============================================================
 
-    app.run(
-        host="0.0.0.0",
-        port=int(
-            os.environ.get(
-                "PORT",
-                7080
-            )
+@app.post(
+    "/api/security/session/check"
+)
+@require_level(2)
+def session_check():
+
+    body = request.get_json(
+        silent=True
+    ) or {}
+
+
+    player_id = safe_player_id(
+        body.get(
+            "UserId"
         )
     )
-''',
-}
 
 
-# ============================================================
-# COMING SOON
-# ============================================================
-
-MOTHERSHIP_V3 = {
-    "id": "mothership-v3",
-    "name": "Mothership V3",
-    "version": "V3",
-    "status": "coming_soon",
-    "status_text": "COMING SOON",
-    "status_size": "huge",
-    "icon": "🔒",
-    "category": "Mothership",
-    "risk": "Critical",
-    "description":
-        "Advanced Mothership protection.",
-    "tags":
-        ["mothership", "coming-soon"],
-    "code": None,
-}
-
-
-MOTHERSHIP_V4 = {
-    "id": "mothership-v4",
-    "name": "Mothership V4",
-    "version": "V4",
-    "status": "coming_soon",
-    "status_text": "COMING SOON",
-    "status_size": "huge",
-    "icon": "🔒",
-    "category": "Mothership",
-    "risk": "Critical",
-    "description":
-        "Next-generation Mothership protection.",
-    "tags":
-        ["mothership", "coming-soon"],
-    "code": None,
-}
-
-
-MOTHERSHIP_V5 = {
-    "id": "mothership-v5",
-    "name": "Mothership V5",
-    "version": "V5",
-    "status": "coming_soon",
-    "status_text": "COMING SOON",
-    "status_size": "huge",
-    "icon": "🔒",
-    "category": "Mothership",
-    "risk": "Critical",
-    "description":
-        "Future advanced Mothership protection.",
-    "tags":
-        ["mothership", "coming-soon"],
-    "code": None,
-}
-
-
-# ============================================================
-# MOTHERSHIP CATALOG
-# ============================================================
-
-MOTHERSHIP = [
-    MOTHERSHIP_V1,
-    MOTHERSHIP_V2,
-    MOTHERSHIP_V3,
-    MOTHERSHIP_V4,
-    MOTHERSHIP_V5,
-]
-
-
-# ============================================================
-# OTHER MODULES
-# ============================================================
-
-MODULES = [
-
-    {
-        "id": "movement",
-        "icon": "🦍",
-        "name": "Movement Integrity",
-        "category": "Movement",
-        "risk": "High",
-        "status": "available",
-        "status_text": "AVAILABLE",
-        "status_size": "normal",
-        "description":
-            "Server-side movement validation.",
-        "tags":
-            ["movement", "velocity", "server"],
-        "code":
-            "# Movement Integrity\n\n"
-            "MAX_SPEED = 7.0\n"
-            "MAX_DELTA = 2.5\n",
-    },
-
-    {
-        "id": "teleport",
-        "icon": "⚡",
-        "name": "Teleport Detection",
-        "category": "Movement",
-        "risk": "High",
-        "status": "available",
-        "status_text": "AVAILABLE",
-        "status_size": "normal",
-        "description":
-            "Detects impossible position changes.",
-        "tags":
-            ["teleport", "position"],
-        "code":
-            "# Teleport Detection\n\n"
-            "MAX_ALLOWED_DISTANCE = 5.0\n",
-    },
-
-    {
-        "id": "session",
-        "icon": "🪪",
-        "name": "Session Integrity",
-        "category": "Authentication",
-        "risk": "High",
-        "status": "available",
-        "status_text": "AVAILABLE",
-        "status_size": "normal",
-        "description":
-            "Protects server sessions.",
-        "tags":
-            ["session", "replay"],
-        "code":
-            "# Session Integrity\n\n"
-            "SESSION_LIFETIME_SECONDS = 900\n",
-    },
-
-    {
-        "id": "rpc",
-        "icon": "📡",
-        "name": "RPC Spam Guard",
-        "category": "Network",
-        "risk": "High",
-        "status": "available",
-        "status_text": "AVAILABLE",
-        "status_size": "normal",
-        "description":
-            "Rate-limits gameplay requests.",
-        "tags":
-            ["rpc", "spam", "network"],
-        "code":
-            "# RPC Spam Guard\n\n"
-            "MAX_REQUESTS_PER_WINDOW = 30\n",
-    },
-]
-
-
-# ============================================================
-# COMBINED CATALOG
-# ============================================================
-
-PRODUCTS = MODULES + MOTHERSHIP
-
-
-# ============================================================
-# TARGETS
-# ============================================================
-
-TARGETS = [
-
-    {
-        "id": "vercel-flask",
-        "name": "Vercel + Flask",
-        "icon": "▲",
-        "description":
-            "Python Flask backend.",
-    },
-
-    {
-        "id": "playfab",
-        "name": "PlayFab",
-        "icon": "🎮",
-        "description":
-            "PlayFab server integration.",
-    },
-]
-
-
-# ============================================================
-# HOME PAGE
-# ============================================================
-
-@app.get("/")
-def home():
-
-    return render_template(
-        "index.html",
-        modules=PRODUCTS,
-        targets=TARGETS,
+    session_id = body.get(
+        "SessionId"
     )
 
 
-# ============================================================
-# CODE PAGE
-# ============================================================
+    valid = validate_session(
 
-@app.get("/code/<product_id>")
-def code_page(product_id):
+        session_id,
 
-    product = next(
-        (
-            item
-            for item in PRODUCTS
-            if item["id"] == product_id
-        ),
-        None,
+        player_id
+
     )
 
-    if product is None:
 
-        return (
-            "Product not found",
-            404
+    if not valid:
+
+        security_event(
+
+            "replay",
+
+            "🔒 SESSION VALIDATION FAILED",
+
+            (
+                "A session request was rejected "
+                "because the session was invalid "
+                "or expired."
+            ),
+
+            "high",
+
+            player_id,
+
+            "Invalid session."
+
         )
 
-
-    coming_soon = (
-        product.get("status")
-        == "coming_soon"
-    )
-
-
-    return render_template(
-        "code.html",
-        module=product,
-        targets=TARGETS,
-        coming_soon=coming_soon,
-    )
-
-
-# ============================================================
-# MODULE API
-# ============================================================
-
-@app.get("/api/modules")
-def get_modules():
-
-    output = []
-
-    for product in PRODUCTS:
-
-        public_product = {
-            key: value
-            for key, value in product.items()
-            if key != "code"
-        }
-
-        output.append(
-            public_product
-        )
-
-    return jsonify(
-        output
-    )
-
-
-@app.get("/api/modules/<product_id>")
-def get_module(product_id):
-
-    product = next(
-        (
-            item
-            for item in PRODUCTS
-            if item["id"] == product_id
-        ),
-        None,
-    )
-
-    if product is None:
 
         return jsonify({
-            "error":
-                "Product not found"
-        }), 404
 
-    return jsonify(
-        product
-    )
+            "success":
+                False,
 
+            "authenticated":
+                False,
 
-# ============================================================
-# DISCORD CONFIGURATION STATUS
-# ============================================================
+        }), 403
 
-@app.get("/api/discord/status")
-def discord_status():
 
     return jsonify({
 
-        "anticheat":
-            bool(
-                DISCORD_WEBHOOKS["anticheat"]
-            ),
+        "success":
+            True,
 
-        "reports":
-            bool(
-                DISCORD_WEBHOOKS["reports"]
-            ),
+        "authenticated":
+            True,
 
-        "security":
-            bool(
-                DISCORD_WEBHOOKS["security"]
-            ),
-
-        "auth":
-            bool(
-                DISCORD_WEBHOOKS["auth"]
-            ),
-
-        "system":
-            bool(
-                DISCORD_WEBHOOKS["system"]
-            ),
     })
 
 
@@ -1562,65 +2275,180 @@ def discord_status():
 # DISCORD TEST
 # ============================================================
 
-@app.post("/api/discord/test/<category>")
-def test_discord(category):
+@app.post(
+    "/api/security/discord-test/<category>"
+)
+def discord_test(
+    category
+):
 
-    allowed_categories = {
-        "anticheat",
-        "reports",
-        "security",
-        "auth",
-        "system",
-    }
-
-    if category not in allowed_categories:
+    if category not in DISCORD_WEBHOOKS:
 
         return jsonify({
-            "success": False,
+
+            "success":
+                False,
+
             "error":
                 "Invalid Discord category."
+
         }), 400
 
 
-    success = send_discord_alert(
+    sent = send_discord(
+
         category,
-        "🦍 Gorilla Guard test notification."
+
+        "🦍 GORILLA GUARD TEST ALERT",
+
+        (
+            "This is a test notification from "
+            "the Gorilla Guard Advanced security "
+            "system."
+        ),
+
+        "info",
+
+        fields=[
+
+            {
+                "name":
+                    "Category",
+
+                "value":
+                    category,
+
+                "inline":
+                    True,
+
+            },
+
+            {
+                "name":
+                    "Security Level",
+
+                "value":
+                    (
+                        f"{DEFAULT_SECURITY_LEVEL} — "
+                        f"{SECURITY_LEVELS[DEFAULT_SECURITY_LEVEL]['name']}"
+                    ),
+
+                "inline":
+                    True,
+
+            },
+
+        ]
+
     )
 
 
-    if not success:
-
-        return jsonify({
-            "success": False,
-            "error":
-                "Webhook is not configured or "
-                "the Discord request failed."
-        }), 400
-
-
     return jsonify({
-        "success": True,
-        "category": category,
+
+        "success":
+            sent,
+
+        "category":
+            category,
+
     })
 
 
 # ============================================================
-# TARGET API
+# SECURITY STATUS
 # ============================================================
 
-@app.get("/api/targets")
-def get_targets():
+@app.get(
+    "/api/security/status"
+)
+def security_status():
 
-    return jsonify(
-        TARGETS
-    )
+    return jsonify({
+
+        "service":
+            "Gorilla Guard Advanced",
+
+        "online":
+            True,
+
+        "security_level":
+            DEFAULT_SECURITY_LEVEL,
+
+        "security_level_name":
+            SECURITY_LEVELS[
+                DEFAULT_SECURITY_LEVEL
+            ]["name"],
+
+        "configuration_ready":
+            security_configuration_ready(),
+
+        "package_configured":
+            bool(
+                CONFIG["package_id"]
+            ),
+
+        "trusted_certificates":
+            len(
+                TRUSTED_CERTIFICATES
+            ),
+
+        "modules": {
+
+            "apk_integrity":
+                True,
+
+            "signature_verification":
+                True,
+
+            "keystore_identity":
+                True,
+
+            "attestation":
+                DEFAULT_SECURITY_LEVEL >= 2,
+
+            "replay_protection":
+                DEFAULT_SECURITY_LEVEL >= 2,
+
+            "session_security":
+                DEFAULT_SECURITY_LEVEL >= 2,
+
+            "device_integrity":
+                DEFAULT_SECURITY_LEVEL >= 2,
+
+            "tamper_detection":
+                DEFAULT_SECURITY_LEVEL >= 3,
+
+            "threat_scoring":
+                DEFAULT_SECURITY_LEVEL >= 3,
+
+            "critical_escalation":
+                DEFAULT_SECURITY_LEVEL >= 3,
+
+            "strict_mode":
+                DEFAULT_SECURITY_LEVEL >= 4,
+
+        },
+
+        "discord": {
+
+            category:
+                bool(webhook)
+
+            for category, webhook
+            in DISCORD_WEBHOOKS.items()
+
+        },
+
+    })
 
 
 # ============================================================
-# HEALTH CHECK
+# HEALTH
 # ============================================================
 
-@app.get("/api/health")
+@app.get(
+    "/api/health"
+)
 def health():
 
     return jsonify({
@@ -1631,64 +2459,68 @@ def health():
         "service":
             "gorilla-guard",
 
-        "mothership": {
+        "security_level":
+            DEFAULT_SECURITY_LEVEL,
 
-            "v1":
-                "available",
+        "security_level_name":
+            SECURITY_LEVELS[
+                DEFAULT_SECURITY_LEVEL
+            ]["name"],
 
-            "v2":
-                "available",
-
-            "v3":
-                "coming_soon",
-
-            "v4":
-                "coming_soon",
-
-            "v5":
-                "coming_soon",
-        },
-
-        "discord": {
-
-            "anticheat":
-                bool(
-                    DISCORD_WEBHOOKS["anticheat"]
-                ),
-
-            "reports":
-                bool(
-                    DISCORD_WEBHOOKS["reports"]
-                ),
-
-            "security":
-                bool(
-                    DISCORD_WEBHOOKS["security"]
-                ),
-
-            "auth":
-                bool(
-                    DISCORD_WEBHOOKS["auth"]
-                ),
-
-            "system":
-                bool(
-                    DISCORD_WEBHOOKS["system"]
-                ),
-        },
     })
 
 
 # ============================================================
-# HELLO WORLD
+# CLEANUP
 # ============================================================
 
-@app.get("/hello-world")
-def hello_world():
+def cleanup_security_state():
 
-    return (
-        "Gorilla Guard backend online."
-    )
+    now = time.time()
+
+
+    expired_nonces = [
+
+        player_id
+
+        for player_id, record
+        in NONCES.items()
+
+        if (
+            now
+            - record["created"]
+            > NONCE_LIFETIME
+        )
+
+    ]
+
+
+    for player_id in expired_nonces:
+
+        NONCES.pop(
+            player_id,
+            None
+        )
+
+
+    expired_sessions = [
+
+        session_id
+
+        for session_id, session
+        in SESSIONS.items()
+
+        if now > session["expires"]
+
+    ]
+
+
+    for session_id in expired_sessions:
+
+        SESSIONS.pop(
+            session_id,
+            None
+        )
 
 
 # ============================================================
@@ -1697,13 +2529,29 @@ def hello_world():
 
 if __name__ == "__main__":
 
+    logger.info(
+        "Starting Gorilla Guard Advanced."
+    )
+
+    logger.info(
+        "Security level: %s (%s)",
+        DEFAULT_SECURITY_LEVEL,
+        SECURITY_LEVELS[
+            DEFAULT_SECURITY_LEVEL
+        ]["name"]
+    )
+
     app.run(
+
         host="0.0.0.0",
+
         port=int(
             os.environ.get(
                 "PORT",
-                5000
+                "5000"
             )
         ),
-        debug=True,
+
+        debug=False,
+
     )
