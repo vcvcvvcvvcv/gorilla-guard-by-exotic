@@ -1641,24 +1641,11 @@ def require_level(
 
 @app.get("/")
 def home():
-
-    return jsonify({
-
-        "service":
-            "Gorilla Guard Advanced",
-
-        "status":
-            "online",
-
-        "security_level":
-            DEFAULT_SECURITY_LEVEL,
-
-        "security_level_name":
-            SECURITY_LEVELS[
-                DEFAULT_SECURITY_LEVEL
-            ]["name"],
-
-    })
+    return render_template(
+        "index.html",
+        modules=PRODUCTS,
+        targets=TARGETS
+    )
 
 
 # ============================================================
