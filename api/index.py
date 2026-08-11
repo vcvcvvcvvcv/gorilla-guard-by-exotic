@@ -1,14 +1,13 @@
-import os, zipfile, textwrap
+import os, zipfile
 
-root="/mnt/data/gtag_anticheat_hub"
+root="/mnt/data/gorillaguard_vercel_fixed"
+os.makedirs(root+"/api", exist_ok=True)
 os.makedirs(root+"/templates", exist_ok=True)
 os.makedirs(root+"/static", exist_ok=True)
 
-files = {
-"app.py": r'''
-from flask import Flask, render_template, jsonify, request
+app_py = r'''from flask import Flask, render_template, jsonify, request
 
-app = Flask(__name__)
+app = Flask(__gorilla-guard-by-exotic__)
 
 MODULES = [
     {"id":"movement","icon":"🦍","name":"Movement Integrity","category":"Movement","risk":"High","description":"Server-side movement validation for impossible speed, position deltas, and velocity.","tags":["movement","velocity","server"]},
@@ -43,7 +42,7 @@ def modules():
 def module(module_id):
     item = next((x for x in MODULES if x["id"] == module_id), None)
     if not item:
-        return jsonify({"error":"Module not found"}), 404
+        return jsonify({"error": "Module not found"}), 404
     return jsonify(item)
 
 @app.get("/api/revisions")
@@ -53,12 +52,19 @@ def revisions():
 @app.post("/api/revisions")
 def create_revision():
     data = request.get_json(silent=True) or {}
-    version = str(data.get("version","")).strip()
-    name = str(data.get("name","")).strip()
+    version = str(data.get("version", "")).strip()
+    name = str(data.get("name", "")).strip()
     changes = data.get("changes", [])
+
     if not version or not name or not isinstance(changes, list):
-        return jsonify({"error":"version, name and changes are required"}), 400
-    revision = {"version":version,"name":name,"status":"Draft","changes":changes}
+        return jsonify({"error": "version, name and changes are required"}), 400
+
+    revision = {
+        "version": version,
+        "name": name,
+        "status": "Draft",
+        "changes": changes,
+    }
     REVISIONS.insert(0, revision)
     return jsonify(revision), 201
 
@@ -68,10 +74,33 @@ def hello_world():
 
 if __name__ == "__main__":
     app.run(debug=True)
-''',
+'''
 
-"templates/index.html": r'''
-<!doctype html>
+index_py = r'''# Vercel entrypoint.
+# Vercel looks for a top-level WSGI variable named "app".
+from app import app
+'''
+
+vercel_json = r'''{
+  "version": 2,
+  "builds": [
+    {
+      "src": "api/index.py",
+      "use": "@vercel/python"
+    }
+  ],
+  "routes": [
+    {
+      "src": "/(.*)",
+      "dest": "api/index.py"
+    }
+  ]
+}'''
+
+requirements = "Flask>=3.1,<4\n"
+
+# Reuse the user's supplied frontend exactly.
+index_html = r'''<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -86,7 +115,6 @@ if __name__ == "__main__":
   <nav><a href="#browse">Browse</a><a href="#revisions">Revisions</a><a href="#backend">Backend</a></nav>
   <div class="online"><i></i> SYSTEM ONLINE</div>
 </header>
-
 <main>
 <section class="hero">
   <div class="hero-copy">
@@ -100,14 +128,12 @@ if __name__ == "__main__":
     <div class="float f1">SERVER AUTHORITATIVE</div><div class="float f2">SECURE AUTH</div><div class="float f3">DISCORD ALERTS</div>
   </div>
 </section>
-
 <section class="quick">
   <div><b>{{ modules|length }}</b><span>MODULES</span></div>
   <div><b>3</b><span>REVISION TRACK</span></div>
   <div><b>FLASK</b><span>BACKEND</span></div>
   <div><b>V2</b><span>ARCHITECTURE</span></div>
 </section>
-
 <section id="browse" class="section">
   <div class="heading"><div><label>01 / BROWSE</label><h2>Anti-Cheat Modules</h2></div><div class="search"><span>⌕</span><input id="search" placeholder="Search modules..."></div></div>
   <div class="filters" id="filters"></div>
@@ -123,12 +149,10 @@ if __name__ == "__main__":
   {% endfor %}
   </div>
 </section>
-
 <section id="backend" class="backend">
   <div><label>02 / INSTALLATION MODEL</label><h2>Keep the active backend separate.</h2><p>Modules selected for your game belong in the server-side Flask backend. The revision system is a separate lane for drafts and history.</p></div>
   <div class="flow"><div>🧑‍💻<b>Game Developer</b><small>Chooses modules</small></div><em>→</em><div>🛡️<b>Backend</b><small>Active protection</small></div><em>→</em><div>📊<b>Detection</b><small>Log + alert</small></div></div>
 </section>
-
 <section id="revisions" class="section">
   <div class="heading"><div><label>03 / REVISION CENTER</label><h2>Separate revision anti-cheat</h2></div><button class="new" onclick="openRevision()">+ New Revision</button></div>
   <div class="timeline">
@@ -138,9 +162,7 @@ if __name__ == "__main__":
   </div>
 </section>
 </main>
-
 <div id="modal" class="modal" onclick="if(event.target===this)closeModal()"><div class="modalbox"><button class="close" onclick="closeModal()">×</button><div id="modalContent"></div></div></div>
-
 <footer>GORILLAGUARD • FLASK / VERCEL • <a href="/hello-world">BACKEND STATUS</a></footer>
 <script>
 const modules = {{ modules|tojson }};
@@ -157,11 +179,9 @@ async function createRevision(){let version=document.getElementById("rv").value,
 function closeModal(){document.getElementById("modal").classList.remove("show")}
 </script>
 </body>
-</html>
-''',
+</html>'''
 
-"static/style.css": r'''
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=Space+Grotesk:wght@500;600;700&display=swap');
+style = r'''@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=Space+Grotesk:wght@500;600;700&display=swap');
 *{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:#070a08;color:#edf3ee;font-family:Inter,Arial,sans-serif}body:before{content:"";position:fixed;inset:0;pointer-events:none;opacity:.18;background-image:linear-gradient(#fff1 1px,transparent 1px),linear-gradient(90deg,#fff1 1px,transparent 1px);background-size:44px 44px}.bg-orb{position:fixed;width:450px;height:450px;border-radius:50%;filter:blur(130px);opacity:.12;pointer-events:none}.one{background:#52f084;left:-200px;top:-200px}.two{background:#9b5cff;right:-250px;top:500px}
 header{height:74px;border-bottom:1px solid #1c241f;background:#080c0ae8;backdrop-filter:blur(15px);display:flex;align-items:center;padding:0 5vw;gap:38px;position:sticky;top:0;z-index:10}.brand{display:flex;align-items:center;gap:10px;margin-right:auto}.logo{font-size:32px}.brand b{font-family:"Space Grotesk";font-size:18px;display:block}.brand small{font-size:8px;color:#6e7c72;letter-spacing:2px}.online{font-size:9px;letter-spacing:1.2px;color:#7e8a83}.online i{display:inline-block;width:7px;height:7px;background:#69ef91;border-radius:50%;box-shadow:0 0 12px #69ef91;margin-right:7px}nav{display:flex;gap:25px}nav a{color:#8a958e;text-decoration:none;font-size:11px}nav a:hover{color:#77ee9a}
 main{max-width:1180px;margin:auto;padding:0 24px}.hero{min-height:560px;display:grid;grid-template-columns:1.1fr .9fr;align-items:center}.eyebrow,label{color:#72ed98;font-size:9px;font-weight:800;letter-spacing:2px}.hero h1{font:700 clamp(54px,7vw,90px)/.9 "Space Grotesk";letter-spacing:-5px;margin:15px 0}.hero h1 span{color:#79f29b}.hero p{color:#849089;line-height:1.7;max-width:550px;font-size:14px}.actions{display:flex;gap:10px;margin-top:28px}.button,.new{display:inline-block;border:1px solid #29342e;background:#0d120f;color:#eaf0ec;padding:12px 16px;border-radius:9px;text-decoration:none;font-weight:700;font-size:11px;cursor:pointer}.button.green{background:#77ee9b;color:#061009;border-color:#77ee9b}.hero-art{height:420px;position:relative;display:grid;place-items:center}.circle{position:absolute;width:330px;height:330px;border:1px solid #31513b;border-radius:50%;box-shadow:0 0 90px #58ed7b14,inset 0 0 70px #58ed7b0b}.gorilla{font-size:170px;filter:drop-shadow(0 30px 25px #000);z-index:2}.float{position:absolute;background:#0e1511;border:1px solid #2c3d32;border-radius:7px;padding:8px 10px;font-size:8px;letter-spacing:1px;color:#aab5ad;z-index:3}.f1{right:5px;top:70px}.f2{left:20px;top:165px}.f3{right:25px;bottom:75px}
@@ -171,47 +191,36 @@ main{max-width:1180px;margin:auto;padding:0 24px}.hero{min-height:560px;display:
 .timeline{border-left:1px solid #2a342e;margin:25px 0 0 10px}.revision{position:relative;display:grid;grid-template-columns:80px 1fr;gap:18px;padding:0 0 32px 28px}.dot{position:absolute;left:-5px;top:4px;width:9px;height:9px;border-radius:50%;background:#77ed99;box-shadow:0 0 13px #77ed99}.ver{font:700 19px "Space Grotesk";color:#77ed99}.revision h3{margin:0;font-size:14px}.revision small{font-size:7px;border:1px solid #303832;padding:4px 6px;border-radius:4px;color:#79837d;margin-left:6px}.revision ul{padding-left:16px;color:#7e8981;font-size:10px;line-height:1.9}
 .modal{position:fixed;inset:0;background:#000b;backdrop-filter:blur(8px);display:none;align-items:center;justify-content:center;z-index:30;padding:20px}.modal.show{display:flex}.modalbox{position:relative;width:min(520px,100%);background:#0b100d;border:1px solid #314036;border-radius:16px;padding:28px;box-shadow:0 30px 80px #000}.close{position:absolute;right:15px;top:12px;background:none;border:0;color:#7f8a83;font-size:25px;cursor:pointer}.modalbox h2{font:700 30px "Space Grotesk";margin:8px 0}.modalbox p{color:#849087;font-size:11px;line-height:1.7}.bigicon{font-size:42px}.modalrisk{display:inline-block;color:#7aef99;background:#13251a;border:1px solid #315b3d;border-radius:6px;padding:6px 8px;font-size:8px;margin:8px 0}.install{margin-top:20px;border:1px solid #294334;background:#0f1b13;padding:13px;border-radius:9px}.install b,.install span{display:block}.install b{font-size:10px;color:#8cf2a5}.install span{font-size:9px;color:#728078;margin-top:4px}.field{display:block;width:100%;margin:9px 0;padding:11px;border:1px solid #28342d;background:#070b09;color:#eef5ef;border-radius:8px;outline:none;font:11px Inter}.field{resize:vertical;min-height:45px}footer{border-top:1px solid #1c241f;text-align:center;padding:28px;color:#59645d;font-size:8px;letter-spacing:1.5px}footer a{color:#76ed98;text-decoration:none}
 @media(max-width:850px){nav{display:none}.hero{grid-template-columns:1fr;padding:60px 0 30px}.hero-art{height:300px}.gorilla{font-size:120px}.quick{grid-template-columns:1fr 1fr}.grid{grid-template-columns:1fr 1fr}.backend{grid-template-columns:1fr}.flow{flex-wrap:wrap}}@media(max-width:550px){main{padding:0 16px}.grid{grid-template-columns:1fr}.heading{align-items:start;flex-direction:column;gap:12px}.search,.search input{width:100%}.search{width:100%}.hero h1{font-size:55px}.hero-art{height:260px}.circle{width:230px;height:230px}.gorilla{font-size:100px}}
-''',
-
-"requirements.txt": "Flask>=3.1,<4\n",
-"vercel.py": "from app import app\n",
-"vercel.json": r'''{
-  "version": 2,
-  "builds": [{"src": "vercel.py", "use": "@vercel/python"}],
-  "routes": [{"src": "/(.*)", "dest": "vercel.py"}]
-}''',
-"README.md": r'''# GorillaGuard Anti-Cheat Hub
-
-A Flask/Vercel dashboard for developers making their own Gorilla Tag-style games.
-
-## What it does
-
-- Browse anti-cheat modules.
-- Search and filter modules.
-- View module details.
-- Keep backend anti-cheat separate from revision history.
-- Create revision drafts through the API.
-- Includes a `/hello-world` endpoint.
-
-## Deploy
-
-Upload the project to a Vercel project and deploy it as a Python project.
-
-This is a dashboard/catalog starter. The "Add to Backend" UI is intentionally a management surface; each actual anti-cheat module must be integrated with the game's real authoritative server and authentication provider.
-
-Do not put Discord webhook secrets or authentication secrets in browser/client code.
 '''
+
+files = {
+    "app.py": app_py,
+    "api/index.py": index_py,
+    "vercel.json": vercel_json,
+    "requirements.txt": requirements,
+    "templates/index.html": index_html,
+    "static/style.css": style,
+    "README.md": """# GorillaGuard Anti-Cheat Hub
+
+Fixed Vercel + Flask layout.
+
+The Vercel entrypoint is `api/index.py`, which imports the Flask `app` from `app.py`.
+
+Deploy the entire project directory. Do not use a second `vercel.py` entrypoint.
+"""
 }
 
 for path, content in files.items():
-    with open(os.path.join(root,path),"w",encoding="utf-8") as f:
+    full=os.path.join(root,path)
+    os.makedirs(os.path.dirname(full), exist_ok=True)
+    with open(full,"w",encoding="utf-8") as f:
         f.write(content.strip()+"\n")
 
-zip_path="/mnt/data/gorillaguard_anti_cheat_hub.zip"
+zip_path="/mnt/data/gorillaguard_vercel_fixed.zip"
 with zipfile.ZipFile(zip_path,"w",zipfile.ZIP_DEFLATED) as z:
-    for d,_,fs in os.walk(root):
+    for d, _, fs in os.walk(root):
         for f in fs:
             p=os.path.join(d,f)
-            z.write(p,os.path.relpath(p,root))
+            z.write(p, os.path.relpath(p,root))
 
 print(zip_path)
