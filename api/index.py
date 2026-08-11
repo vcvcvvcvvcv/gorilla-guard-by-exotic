@@ -27,12 +27,6 @@ app.config["MAX_CONTENT_LENGTH"] = 512 * 1024
 # ============================================================
 # GAME CONFIGURATION
 # ============================================================
-#
-# These are placeholders only.
-#
-# Configure the real values as server-side environment
-# variables. Do NOT put real secret keys in this file.
-# ============================================================
 
 GAME_CONFIG = {
     "titleid": os.environ.get(
@@ -61,18 +55,7 @@ GAME_CONFIG = {
 
 
 # ============================================================
-# DISCORD WEBHOOK CONFIGURATION
-# ============================================================
-#
-# FIVE SEPARATE DESTINATIONS
-#
-# 1. Anti-cheat detections
-# 2. Player reports
-# 3. Security events
-# 4. Authentication failures
-# 5. System/server events
-#
-# The real webhook URLs are environment variables.
+# GENERAL DISCORD WEBHOOK CONFIGURATION
 # ============================================================
 
 DISCORD_WEBHOOKS = {
@@ -100,21 +83,12 @@ DISCORD_WEBHOOKS = {
 
 
 # ============================================================
-# DISCORD ALERT HELPER
+# GENERAL DISCORD ALERT
 # ============================================================
 
-def send_discord_alert(
-    category,
-    message
-):
-    """
-    Sends an alert to the webhook assigned
-    to the specified category.
-    """
+def send_discord_alert(category, message):
 
-    webhook = DISCORD_WEBHOOKS.get(
-        category
-    )
+    webhook = DISCORD_WEBHOOKS.get(category)
 
     if not webhook:
         return False
@@ -123,11 +97,9 @@ def send_discord_alert(
 
         response = requests.post(
             webhook,
-
             json={
                 "content": message
             },
-
             timeout=5,
         )
 
@@ -138,14 +110,7 @@ def send_discord_alert(
         return False
 
 
-# ============================================================
-# SECURITY EVENT LOGGER
-# ============================================================
-
-def security_event(
-    category,
-    message
-):
+def security_event(category, message):
 
     send_discord_alert(
         category,
@@ -180,8 +145,8 @@ MOTHERSHIP_V1 = {
     "description": (
         "Foundational server-side integrity "
         "authentication with attestation, "
-        "package verification, and device "
-        "integrity validation."
+        "package verification, device integrity "
+        "validation, and Discord pass/fail logging."
     ),
 
     "tags": [
@@ -189,6 +154,7 @@ MOTHERSHIP_V1 = {
         "attestation",
         "integrity",
         "authentication",
+        "discord",
     ],
 
     "required_configuration": [
@@ -197,6 +163,8 @@ MOTHERSHIP_V1 = {
         "package_id",
         "playfab_secret_key",
         "meta_api_key",
+        "mothership_v1_pass_webhook",
+        "mothership_v1_fail_webhook",
     ],
 
     "code": r'''
@@ -226,11 +194,13 @@ META_APP_ID = os.environ.get(
 )
 
 PLAYFAB_SECRET_KEY = os.environ.get(
-    "PLAYFAB_SECRET_KEY"
+    "PLAYFAB_SECRET_KEY",
+    "YOUR_PLAYFAB_SECRET_KEY"
 )
 
 META_API_KEY = os.environ.get(
-    "META_API_KEY"
+    "META_API_KEY",
+    "YOUR_META_API_KEY"
 )
 
 VALID_PACKAGE = os.environ.get(
@@ -240,14 +210,65 @@ VALID_PACKAGE = os.environ.get(
 
 
 # ============================================================
-# FAILURE RESPONSE
+# DISCORD WEBHOOK CONFIGURATION
+# ============================================================
+#
+# Put the real values in your server environment.
+#
+# PASS = successful authentication
+# FAIL = rejected authentication
+# ============================================================
+
+DISCORD_WEBHOOK_PASS = os.environ.get(
+    "MOTHERSHIP_V1_PASS_WEBHOOK",
+    "YOUR_MOTHERSHIP_V1_PASS_WEBHOOK"
+)
+
+DISCORD_WEBHOOK_FAIL = os.environ.get(
+    "MOTHERSHIP_V1_FAIL_WEBHOOK",
+    "YOUR_MOTHERSHIP_V1_FAIL_WEBHOOK"
+)
+
+
+# ============================================================
+# DISCORD HELPER
+# ============================================================
+
+def send_discord(webhook, message):
+
+    if not webhook:
+        return False
+
+    if webhook.startswith("YOUR_"):
+        return False
+
+    try:
+
+        response = requests.post(
+            webhook,
+            json={
+                "content": message
+            },
+            timeout=5,
+        )
+
+        return 200 <= response.status_code < 300
+
+    except requests.RequestException:
+
+        return False
+
+
+# ============================================================
+# AUTHENTICATION FAILURE
 # ============================================================
 
 def authentication_failed(reason):
 
     return jsonify({
 
-        "success": False,
+        "success":
+            False,
 
         "BanMessage":
             "MOTHERSHIP V1 AUTHENTICATION FAILED. "
@@ -362,10 +383,10 @@ def mothership_auth():
 
     if not user_id:
 
-        security_event(
-            "auth",
-            "Mothership V1 rejected authentication: "
-            "missing UserId."
+        send_discord(
+            DISCORD_WEBHOOK_FAIL,
+            "🔴 Gorilla Guard Mothership V1 FAIL\n"
+            "Reason: Missing UserId."
         )
 
         return authentication_failed(
@@ -375,10 +396,11 @@ def mothership_auth():
 
     if not token:
 
-        security_event(
-            "auth",
-            f"Mothership V1 rejected authentication "
-            f"for player {user_id}: missing token."
+        send_discord(
+            DISCORD_WEBHOOK_FAIL,
+            f"🔴 Gorilla Guard Mothership V1 FAIL\n"
+            f"Player: {user_id}\n"
+            "Reason: Missing AttestationToken."
         )
 
         return authentication_failed(
@@ -393,10 +415,11 @@ def mothership_auth():
 
     if not data:
 
-        security_event(
-            "security",
-            f"Mothership V1 attestation verification "
-            f"failed for player {user_id}."
+        send_discord(
+            DISCORD_WEBHOOK_FAIL,
+            f"🔴 Gorilla Guard Mothership V1 FAIL\n"
+            f"Player: {user_id}\n"
+            "Reason: Attestation verification failed."
         )
 
         return authentication_failed(
@@ -412,10 +435,11 @@ def mothership_auth():
 
     if not records:
 
-        security_event(
-            "security",
-            f"Mothership V1 received an empty "
-            f"attestation response for {user_id}."
+        send_discord(
+            DISCORD_WEBHOOK_FAIL,
+            f"🔴 Gorilla Guard Mothership V1 FAIL\n"
+            f"Player: {user_id}\n"
+            "Reason: Attestation response contained no data."
         )
 
         return authentication_failed(
@@ -430,10 +454,11 @@ def mothership_auth():
         "message"
     ) != "success":
 
-        security_event(
-            "security",
-            f"Mothership V1 rejected invalid "
-            f"attestation for {user_id}."
+        send_discord(
+            DISCORD_WEBHOOK_FAIL,
+            f"🔴 Gorilla Guard Mothership V1 FAIL\n"
+            f"Player: {user_id}\n"
+            "Reason: Attestation validation failed."
         )
 
         return authentication_failed(
@@ -449,6 +474,13 @@ def mothership_auth():
 
 
     if not claims:
+
+        send_discord(
+            DISCORD_WEBHOOK_FAIL,
+            f"🔴 Gorilla Guard Mothership V1 FAIL\n"
+            f"Player: {user_id}\n"
+            "Reason: Invalid attestation claims."
+        )
 
         return authentication_failed(
             "Invalid attestation claims."
@@ -485,6 +517,13 @@ def mothership_auth():
 
     if not package_id:
 
+        send_discord(
+            DISCORD_WEBHOOK_FAIL,
+            f"🔴 Gorilla Guard Mothership V1 FAIL\n"
+            f"Player: {user_id}\n"
+            "Reason: Package ID missing."
+        )
+
         return authentication_failed(
             "Package ID missing."
         )
@@ -492,19 +531,26 @@ def mothership_auth():
 
     if package_id != VALID_PACKAGE:
 
-        security_event(
-            "anticheat",
-            f"Mothership V1 detected a package "
-            f"mismatch for player {user_id}."
+        send_discord(
+            DISCORD_WEBHOOK_FAIL,
+            f"🔴 Gorilla Guard Mothership V1 FAIL\n"
+            f"Player: {user_id}\n"
+            "Reason: Package ID mismatch."
         )
 
         return authentication_failed(
-            "Package ID does not match the "
-            "configured application."
+            "Package ID does not match the configured application."
         )
 
 
     if not package_digest:
+
+        send_discord(
+            DISCORD_WEBHOOK_FAIL,
+            f"🔴 Gorilla Guard Mothership V1 FAIL\n"
+            f"Player: {user_id}\n"
+            "Reason: Package certificate digest missing."
+        )
 
         return authentication_failed(
             "Package certificate digest missing."
@@ -513,6 +559,13 @@ def mothership_auth():
 
     if not unique_id:
 
+        send_discord(
+            DISCORD_WEBHOOK_FAIL,
+            f"🔴 Gorilla Guard Mothership V1 FAIL\n"
+            f"Player: {user_id}\n"
+            "Reason: Device identity missing."
+        )
+
         return authentication_failed(
             "Device identity missing."
         )
@@ -520,10 +573,11 @@ def mothership_auth():
 
     if integrity_state != "Advanced":
 
-        security_event(
-            "anticheat",
-            f"Mothership V1 rejected an untrusted "
-            f"device for player {user_id}."
+        send_discord(
+            DISCORD_WEBHOOK_FAIL,
+            f"🔴 Gorilla Guard Mothership V1 FAIL\n"
+            f"Player: {user_id}\n"
+            "Reason: Device integrity was not trusted."
         )
 
         return authentication_failed(
@@ -531,10 +585,11 @@ def mothership_auth():
         )
 
 
-    security_event(
-        "system",
-        f"Mothership V1 authentication passed "
-        f"for player {user_id}."
+    send_discord(
+        DISCORD_WEBHOOK_PASS,
+        f"🟢 Gorilla Guard Mothership V1 PASS\n"
+        f"Player: {user_id}\n"
+        "Status: Integrity authentication passed."
     )
 
 
@@ -595,7 +650,7 @@ MOTHERSHIP_V2 = {
         "Enhanced Mothership authentication with "
         "nonce-based replay resistance, stricter "
         "attestation validation, package verification, "
-        "and security-event handling."
+        "device validation, and Discord pass/fail logging."
     ),
 
     "tags": [
@@ -604,6 +659,7 @@ MOTHERSHIP_V2 = {
         "nonce",
         "replay",
         "integrity",
+        "discord",
     ],
 
     "required_configuration": [
@@ -612,6 +668,8 @@ MOTHERSHIP_V2 = {
         "package_id",
         "playfab_secret_key",
         "meta_api_key",
+        "mothership_v2_pass_webhook",
+        "mothership_v2_fail_webhook",
     ],
 
     "code": r'''
@@ -644,17 +702,63 @@ META_APP_ID = os.environ.get(
 )
 
 PLAYFAB_SECRET_KEY = os.environ.get(
-    "PLAYFAB_SECRET_KEY"
+    "PLAYFAB_SECRET_KEY",
+    "YOUR_PLAYFAB_SECRET_KEY"
 )
 
 META_API_KEY = os.environ.get(
-    "META_API_KEY"
+    "META_API_KEY",
+    "YOUR_META_API_KEY"
 )
 
 VALID_PACKAGE = os.environ.get(
     "VALID_PACKAGE",
     "YOUR_PACKAGE_ID"
 )
+
+
+# ============================================================
+# DISCORD WEBHOOK CONFIGURATION
+# ============================================================
+
+DISCORD_WEBHOOK_PASS = os.environ.get(
+    "MOTHERSHIP_V2_PASS_WEBHOOK",
+    "YOUR_MOTHERSHIP_V2_PASS_WEBHOOK"
+)
+
+DISCORD_WEBHOOK_FAIL = os.environ.get(
+    "MOTHERSHIP_V2_FAIL_WEBHOOK",
+    "YOUR_MOTHERSHIP_V2_FAIL_WEBHOOK"
+)
+
+
+# ============================================================
+# DISCORD HELPER
+# ============================================================
+
+def send_discord(webhook, message):
+
+    if not webhook:
+        return False
+
+    if webhook.startswith("YOUR_"):
+        return False
+
+    try:
+
+        response = requests.post(
+            webhook,
+            json={
+                "content": message
+            },
+            timeout=5,
+        )
+
+        return 200 <= response.status_code < 300
+
+    except requests.RequestException:
+
+        return False
 
 
 # ============================================================
@@ -670,7 +774,28 @@ NONCE_LIFETIME = 120
 # FAILURE
 # ============================================================
 
-def authentication_failed(reason):
+def authentication_failed(
+    reason,
+    user_id=""
+):
+
+    if user_id:
+
+        send_discord(
+            DISCORD_WEBHOOK_FAIL,
+            f"🔴 Gorilla Guard Mothership V2 FAIL\n"
+            f"Player: {user_id}\n"
+            f"Reason: {reason}"
+        )
+
+    else:
+
+        send_discord(
+            DISCORD_WEBHOOK_FAIL,
+            f"🔴 Gorilla Guard Mothership V2 FAIL\n"
+            f"Reason: {reason}"
+        )
+
 
     return jsonify({
 
@@ -852,13 +977,6 @@ def request_nonce():
     )
 
 
-    security_event(
-        "system",
-        f"Mothership V2 issued an authentication "
-        f"nonce for player {user_id}."
-    )
-
-
     return jsonify({
 
         "nonce":
@@ -916,7 +1034,8 @@ def mothership_auth():
     if not token:
 
         return authentication_failed(
-            "Missing AttestationToken."
+            "Missing AttestationToken.",
+            user_id
         )
 
 
@@ -927,14 +1046,9 @@ def mothership_auth():
 
     if not expected_nonce:
 
-        security_event(
-            "security",
-            f"Mothership V2 rejected an expired "
-            f"or missing nonce for {user_id}."
-        )
-
         return authentication_failed(
-            "Nonce expired or does not exist."
+            "Nonce expired or does not exist.",
+            user_id
         )
 
 
@@ -943,14 +1057,9 @@ def mothership_auth():
         expected_nonce
     ):
 
-        security_event(
-            "anticheat",
-            f"Mothership V2 detected a nonce "
-            f"mismatch for {user_id}."
-        )
-
         return authentication_failed(
-            "Nonce mismatch."
+            "Nonce mismatch.",
+            user_id
         )
 
 
@@ -962,7 +1071,8 @@ def mothership_auth():
     if not data:
 
         return authentication_failed(
-            "Attestation verification failed."
+            "Attestation verification failed.",
+            user_id
         )
 
 
@@ -975,7 +1085,8 @@ def mothership_auth():
     if not records:
 
         return authentication_failed(
-            "Attestation response was empty."
+            "Attestation response was empty.",
+            user_id
         )
 
 
@@ -986,14 +1097,9 @@ def mothership_auth():
         "message"
     ) != "success":
 
-        security_event(
-            "security",
-            f"Mothership V2 rejected invalid "
-            f"attestation for {user_id}."
-        )
-
         return authentication_failed(
-            "Attestation validation failed."
+            "Attestation validation failed.",
+            user_id
         )
 
 
@@ -1007,7 +1113,8 @@ def mothership_auth():
     if not claims:
 
         return authentication_failed(
-            "Invalid attestation claims."
+            "Invalid attestation claims.",
+            user_id
         )
 
 
@@ -1042,47 +1149,40 @@ def mothership_auth():
     if not package_id:
 
         return authentication_failed(
-            "Package ID missing."
+            "Package ID missing.",
+            user_id
         )
 
 
     if package_id != VALID_PACKAGE:
 
-        security_event(
-            "anticheat",
-            f"Mothership V2 detected a package "
-            f"mismatch for {user_id}."
-        )
-
         return authentication_failed(
-            "Package ID mismatch."
+            "Package ID mismatch.",
+            user_id
         )
 
 
     if not package_digest:
 
         return authentication_failed(
-            "Package certificate digest missing."
+            "Package certificate digest missing.",
+            user_id
         )
 
 
     if not unique_id:
 
         return authentication_failed(
-            "Device identity missing."
+            "Device identity missing.",
+            user_id
         )
 
 
     if integrity_state != "Advanced":
 
-        security_event(
-            "anticheat",
-            f"Mothership V2 rejected an untrusted "
-            f"device for {user_id}."
-        )
-
         return authentication_failed(
-            "Device integrity was not trusted."
+            "Device integrity was not trusted.",
+            user_id
         )
 
 
@@ -1096,10 +1196,12 @@ def mothership_auth():
     ).hexdigest()[:24]
 
 
-    security_event(
-        "system",
-        f"Mothership V2 authentication passed "
-        f"for player {user_id}."
+    send_discord(
+        DISCORD_WEBHOOK_PASS,
+        f"🟢 Gorilla Guard Mothership V2 PASS\n"
+        f"Player: {user_id}\n"
+        f"Device Reference: {device_reference}\n"
+        "Status: Enhanced integrity authentication passed."
     )
 
 
